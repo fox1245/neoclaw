@@ -143,12 +143,12 @@ std::vector<ChatMessage> rewrite_for_gemma(
 // substring `"tool_call"`. Returns (start, end) offsets with end
 // exclusive; `std::nullopt` if no match.
 // ----------------------------------------------------------------------
+// Tolerates up to three missing trailing `}` — see local_provider.cpp
+// for the Gemma-4 truncation rationale.
 std::optional<std::pair<size_t, size_t>> find_tool_call_block(
     const std::string& text) {
-
     for (size_t i = 0; i < text.size(); ++i) {
         if (text[i] != '{') continue;
-        // Scan the balanced object starting at i.
         int depth = 0;
         bool in_string = false;
         bool escape    = false;
@@ -169,10 +169,30 @@ std::optional<std::pair<size_t, size_t>> find_tool_call_block(
                     if (slice.find("\"tool_call\"") != std::string::npos) {
                         return std::make_pair(i, j + 1);
                     }
-                    break; // non-match — try the next top-level `{`
+                    break;
                 }
             }
         }
+    }
+
+    const size_t anchor = text.find("{\"tool_call\"");
+    if (anchor == std::string::npos) return std::nullopt;
+    int depth = 0;
+    bool in_str = false, esc = false;
+    for (size_t j = anchor; j < text.size(); ++j) {
+        char c = text[j];
+        if (in_str) {
+            if (esc) esc = false;
+            else if (c == '\\') esc = true;
+            else if (c == '"') in_str = false;
+            continue;
+        }
+        if (c == '"')      in_str = true;
+        else if (c == '{') ++depth;
+        else if (c == '}') --depth;
+    }
+    if (depth > 0 && depth <= 3) {
+        return std::make_pair(anchor, text.size());
     }
     return std::nullopt;
 }
@@ -185,7 +205,22 @@ std::optional<std::pair<size_t, size_t>> find_tool_call_block(
 // ----------------------------------------------------------------------
 std::optional<ToolCall> parse_tool_call(const std::string& body) {
     try {
-        auto j = json::parse(body);
+        int depth = 0;
+        bool in_str = false, esc = false;
+        for (char c : body) {
+            if (in_str) {
+                if (esc) esc = false;
+                else if (c == '\\') esc = true;
+                else if (c == '"') in_str = false;
+                continue;
+            }
+            if (c == '"')      in_str = true;
+            else if (c == '{') ++depth;
+            else if (c == '}') --depth;
+        }
+        std::string fixed = body;
+        while (depth-- > 0) fixed += '}';
+        auto j = json::parse(fixed);
         if (!j.contains("tool_call")) return std::nullopt;
         auto tc = j["tool_call"];
         if (!tc.contains("name")) return std::nullopt;
@@ -310,15 +345,11 @@ ChatCompletion GemmaProvider::complete_stream(
             resp.message.tool_calls.clear();
             resp.message.tool_calls.push_back(*tc);
 
-            // Keep any prose that preceded the JSON — useful when the
-            // model narrated before the call. Strip the JSON itself,
-            // plus any control tokens from the prose.
             std::string pre = raw.substr(0, span->first);
             std::string carry;
             ui::strip_chat_artifacts(pre, carry);
             resp.message.content = pre;
 
-            // Stderr trace so the user sees the agent's work.
             std::string args_preview = tc->arguments;
             if (args_preview.size() > 80) args_preview.resize(80);
             ui::print_tool_start(tc->name, args_preview);
@@ -326,7 +357,18 @@ ChatCompletion GemmaProvider::complete_stream(
         }
     }
 
-    // No tool call — clean up the assistant content for display.
+    // Same handling as local_provider: if a tool_call opener was seen
+    // but the JSON didn't parse, return an empty turn so the garbled
+    // bytes don't contaminate the conversation history.
+    if (saw_tool_prefix) {
+        std::fprintf(stderr,
+            "[neoclaw] warning: model started a tool_call but emitted "
+            "unparseable JSON (%zu bytes); turn dropped.\n",
+            raw.size());
+        resp.message.content = "";
+        return resp;
+    }
+
     std::string clean = raw;
     std::string carry;
     ui::strip_chat_artifacts(clean, carry);

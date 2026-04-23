@@ -167,10 +167,17 @@ std::string render_chat(const std::vector<ChatMessage>& msgs) {
     return os.str();
 }
 
-// Balanced-brace scan for {"tool_call": ...}, identical semantics to
-// the http-path parser.
+// Balanced-brace scan for {"tool_call": ...}. Tolerates up to three
+// missing trailing `}` because Gemma-4 E4B (and similar smaller models)
+// routinely emit their turn-stop sequence (`<end_of_turn>`) one brace
+// early — the JSON opens `{{{ … }}` (three opens, two closes) and the
+// stop sequence fires before the model can type the outer `}`. When we
+// detect that shape we treat the tail as implicitly closed; json::parse
+// below operates on a synthesised balanced slice.
 std::optional<std::pair<size_t, size_t>> find_tool_call_block(
     const std::string& text) {
+    // Standard strict scan first — covers happy-path models (GPT-4,
+    // Claude, Qwen-Coder) that ship well-formed JSON.
     for (size_t i = 0; i < text.size(); ++i) {
         if (text[i] != '{') continue;
         int depth = 0;
@@ -196,12 +203,54 @@ std::optional<std::pair<size_t, size_t>> find_tool_call_block(
             }
         }
     }
+
+    // Lenient pass: find the first `{"tool_call"` and measure brace
+    // imbalance through end of text. If we're short by 1-3 `}`, return
+    // a span that covers the text plus a note that the caller will
+    // append the missing braces before JSON-parsing.
+    const size_t anchor = text.find("{\"tool_call\"");
+    if (anchor == std::string::npos) return std::nullopt;
+
+    int depth = 0;
+    bool in_str = false, esc = false;
+    for (size_t j = anchor; j < text.size(); ++j) {
+        char c = text[j];
+        if (in_str) {
+            if (esc) esc = false;
+            else if (c == '\\') esc = true;
+            else if (c == '"') in_str = false;
+            continue;
+        }
+        if (c == '"')      in_str = true;
+        else if (c == '{') ++depth;
+        else if (c == '}') --depth;
+    }
+    if (depth > 0 && depth <= 3) {
+        // Return the full remaining tail; caller will close braces.
+        return std::make_pair(anchor, text.size());
+    }
     return std::nullopt;
 }
 
 std::optional<ToolCall> parse_tool_call(const std::string& body) {
     try {
-        auto j = json::parse(body);
+        // Count brace imbalance and pad with trailing `}` if needed.
+        int depth = 0;
+        bool in_str = false, esc = false;
+        for (char c : body) {
+            if (in_str) {
+                if (esc) esc = false;
+                else if (c == '\\') esc = true;
+                else if (c == '"') in_str = false;
+                continue;
+            }
+            if (c == '"')      in_str = true;
+            else if (c == '{') ++depth;
+            else if (c == '}') --depth;
+        }
+        std::string fixed = body;
+        while (depth-- > 0) fixed += '}';
+        auto j = json::parse(fixed);
         if (!j.contains("tool_call")) return std::nullopt;
         auto tc = j["tool_call"];
         if (!tc.contains("name")) return std::nullopt;
@@ -349,6 +398,29 @@ ChatCompletion LocalProvider::complete_stream(
             ui::print_tool_start(tc->name, args_preview);
             return resp;
         }
+    }
+
+    // If we saw a `{"tool_call"` opener but couldn't find a balanced /
+    // parseable JSON block, the model started emitting a tool call and
+    // then botched it (truncated mid-JSON, spurious stop-sequence, etc.).
+    // Return an empty turn rather than bleeding the garbled raw bytes
+    // into the conversation history — otherwise the next turn shows the
+    // model hallucinating a "yes I wrote the file" narrative based on
+    // its own malformed prior output. Also log to stderr so the user
+    // knows their request actually did something, it just crashed on
+    // the way out.
+    if (saw_tool_prefix) {
+        std::fprintf(stderr,
+            "[neoclaw] warning: model started a tool_call but emitted "
+            "unparseable JSON (%zu bytes); turn dropped.\n",
+            raw_buffered.size());
+        if (const char* dump_env = std::getenv("NEOCLAW_DUMP_BAD_JSON");
+            dump_env && *dump_env && *dump_env != '0') {
+            std::fprintf(stderr, "----- raw model output -----\n%s\n----- end -----\n",
+                         raw_buffered.c_str());
+        }
+        resp.message.content = "";
+        return resp;
     }
 
     std::string clean = raw_buffered;
