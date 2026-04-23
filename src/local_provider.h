@@ -22,7 +22,13 @@ class LocalProvider : public neograph::Provider {
 public:
     struct Config {
         float temperature = 0.3f;
-        int   max_tokens  = 1024;
+        // Bumped from 1024 → 8192 because write_file tool calls often
+        // ship a multi-kilobyte file body inside the JSON `arguments.content`
+        // field (CUDA kernels, C++ headers, full README bodies). Hitting
+        // the cap mid-JSON breaks the balanced-brace parser and leaves
+        // the agent with unusable output. 8192 covers ~6 KB of source
+        // per turn, which is plenty for a single file.
+        int   max_tokens  = 8192;
     };
 
     /// Takes ownership of the loaded model. Construct via

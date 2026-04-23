@@ -251,7 +251,17 @@ ChatCompletion GemmaProvider::complete_stream(
     //       sees the model's internal control tokens mid-stream.
     std::string raw_buffered;       ///< Unfiltered — what the model really said.
     std::string filter_carry;       ///< Cross-chunk boundary holdback for strip.
+    std::string lead_buffer;        ///< Leading-edge holdoff — see below.
     bool        saw_tool_prefix = false;
+    bool        lead_flushed    = false;
+
+    // Leading-edge holdoff: hold the first ~24 visible bytes so a
+    // tool-call JSON opener (`{"tool_call"` = 13 chars) is fully
+    // disambiguated from legitimate prose before any byte leaks to
+    // stdout. Without this, a stream like `{`, `"`, `to`, `ol_` would
+    // paint the first few chars of the JSON onto the user's terminal
+    // before our pattern match fires and suppresses the rest.
+    constexpr size_t LEAD_HOLDOFF = 24;
 
     auto capture = [&](const std::string& tok) {
         raw_buffered += tok;
@@ -259,23 +269,34 @@ ChatCompletion GemmaProvider::complete_stream(
         std::string out_tok = tok;
         ui::strip_chat_artifacts(out_tok, filter_carry);
 
-        // Don't paint half of a tool-call JSON on stdout — as soon as
-        // we see the `{"tool_call"` prefix, stop forwarding tokens.
-        // We'll print the structured tool trace on stderr instead.
-        if (!saw_tool_prefix) {
-            const auto& acc = raw_buffered;
-            if (acc.find("{\"tool_call\"") != std::string::npos) {
-                saw_tool_prefix = true;
-            }
-            if (on_chunk && !out_tok.empty() && !saw_tool_prefix) {
-                on_chunk(out_tok);
-            }
+        if (saw_tool_prefix) return;
+
+        if (raw_buffered.find("{\"tool_call\"") != std::string::npos) {
+            saw_tool_prefix = true;
+            lead_buffer.clear();    // never surfaces to stdout
+            return;
         }
+
+        if (!lead_flushed) {
+            lead_buffer += out_tok;
+            if (lead_buffer.size() >= LEAD_HOLDOFF) {
+                if (on_chunk && !lead_buffer.empty()) on_chunk(lead_buffer);
+                lead_buffer.clear();
+                lead_flushed = true;
+            }
+            return;
+        }
+
+        if (on_chunk && !out_tok.empty()) on_chunk(out_tok);
     };
 
     auto resp = delegate_->complete_stream(p, capture);
-    // Flush anything still held in the carry buffer (e.g. trailing `<`
-    // that turned out not to be a control token).
+    // Flush the lead buffer (short assistant replies that never hit
+    // the holdoff threshold) and any control-token-strip carry.
+    if (!saw_tool_prefix && on_chunk && !lead_buffer.empty()) {
+        on_chunk(lead_buffer);
+        lead_buffer.clear();
+    }
     if (!saw_tool_prefix && on_chunk && !filter_carry.empty()) {
         std::string tail = filter_carry;
         filter_carry.clear();

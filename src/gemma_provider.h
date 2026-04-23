@@ -25,7 +25,10 @@ public:
         std::string endpoint   = "http://localhost:8090"; ///< Base URL (no /v1 suffix).
         std::string model_name = "gemma";                 ///< Informational; server ignores.
         float       temperature = 0.2f;                   ///< Default temperature.
-        int         max_tokens  = 2048;                   ///< Default max_tokens.
+        // See the note on LocalProvider::Config::max_tokens — tool
+        // calls carrying file bodies can easily exceed 2k tokens.
+        int         max_tokens  = 8192;
+
     };
 
     explicit GemmaProvider(Config cfg);

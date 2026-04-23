@@ -277,8 +277,17 @@ ChatCompletion LocalProvider::complete_stream(
                                                      : cfg_.temperature;
     gc.stop_sequences = {"<end_of_turn>", "<eos>"};
 
-    std::string raw_buffered, filter_carry;
+    std::string raw_buffered, filter_carry, lead_buffer;
     bool saw_tool_prefix = false;
+    bool lead_flushed    = false;
+
+    // Leading-edge buffer: hold back the first N bytes of the stream so
+    // a tool-call-opening `{"tool_call"` prefix is fully matched BEFORE
+    // any of it reaches stdout. 24 bytes is enough to disambiguate
+    // `{"tool_call"` (13 chars) from any plausible prose start. Once the
+    // buffer passes that length and we haven't matched the tool prefix,
+    // flush it and stream live.
+    constexpr size_t LEAD_HOLDOFF = 24;
 
     gc.streamer = [&](const std::string& tok) {
         raw_buffered += tok;
@@ -286,12 +295,25 @@ ChatCompletion LocalProvider::complete_stream(
         std::string out_tok = tok;
         ui::strip_chat_artifacts(out_tok, filter_carry);
 
-        if (!saw_tool_prefix) {
-            if (raw_buffered.find("{\"tool_call\"") != std::string::npos)
-                saw_tool_prefix = true;
-            if (on_chunk && !out_tok.empty() && !saw_tool_prefix)
-                on_chunk(out_tok);
+        if (saw_tool_prefix) return;
+
+        if (raw_buffered.find("{\"tool_call\"") != std::string::npos) {
+            saw_tool_prefix = true;
+            lead_buffer.clear();   // discard; never surfaces to stdout
+            return;
         }
+
+        if (!lead_flushed) {
+            lead_buffer += out_tok;
+            if (lead_buffer.size() >= LEAD_HOLDOFF) {
+                if (on_chunk && !lead_buffer.empty()) on_chunk(lead_buffer);
+                lead_buffer.clear();
+                lead_flushed = true;
+            }
+            return;
+        }
+
+        if (on_chunk && !out_tok.empty()) on_chunk(out_tok);
     };
 
     try {
@@ -300,6 +322,12 @@ ChatCompletion LocalProvider::complete_stream(
         throw std::runtime_error(std::string("local inference failed: ") + e.what());
     }
 
+    // Flush anything held in the lead buffer — a short (<24-byte)
+    // assistant reply that never crossed the holdoff threshold.
+    if (!saw_tool_prefix && on_chunk && !lead_buffer.empty()) {
+        on_chunk(lead_buffer);
+        lead_buffer.clear();
+    }
     if (!saw_tool_prefix && on_chunk && !filter_carry.empty()) {
         std::string tail = filter_carry;
         filter_carry.clear();
