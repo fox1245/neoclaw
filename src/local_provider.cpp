@@ -49,30 +49,45 @@ using neograph::StreamCallback;
 using neograph::ToolCall;
 using neograph::json;
 
+// Render a JSON Schema parameter block as a compact signature string.
+// e.g. `path: str, content: str` — no schema verbosity, just names+types.
+// This shaves the tool-injection prompt from ~520 tokens to ~120 tokens
+// for the default 4-tool set, which is a 4x prefill reduction. Most
+// instruction-tuned models (Gemma, Qwen, Llama) infer arg types from
+// the signature just fine.
+std::string compact_signature(const json& params) {
+    if (!params.is_object() || !params.contains("properties"))
+        return std::string();
+    std::ostringstream os;
+    bool first = true;
+    for (auto [name, spec] : params["properties"].items()) {
+        if (!first) os << ", ";
+        first = false;
+        os << name;
+        if (spec.is_object() && spec.contains("type"))
+            os << ": " << spec["type"].template get<std::string>();
+    }
+    return os.str();
+}
+
 std::string build_tool_protocol(const std::vector<ChatTool>& tools,
                                 const std::string& user_system) {
     std::ostringstream os;
     if (!user_system.empty()) os << user_system << "\n\n";
-    os << "## Tool protocol\n\n";
     if (tools.empty()) {
         os << "You have no tools available.";
         return os.str();
     }
-    os << "You have access to the following tools:\n\n";
+    os << "Tools:\n";
     for (const auto& t : tools) {
-        os << "### " << t.name << "\n" << t.description << "\n"
-           << "Parameters (JSON Schema): " << t.parameters.dump() << "\n\n";
+        os << "- " << t.name << "(" << compact_signature(t.parameters) << ") — "
+           << t.description << "\n";
     }
-    os << "When you decide to call a tool, respond with ONLY a single JSON "
-          "object in this exact shape, with no prose, no markdown fences, "
-          "no explanation before or after:\n\n"
-       << R"({"tool_call": {"name": "<tool_name>", "arguments": {<args>}}})"
-       << "\n\n"
-          "A tool result will come back as a user message prefixed with "
-          "`TOOL_RESULT:`. Read it, then either call another tool or "
-          "respond to the original user question in plain prose. Never "
-          "emit a tool call for conversational or code-generation requests "
-          "that don't actually need a tool.";
+    os << "\nTo call a tool, reply with ONLY this JSON (no prose, no fences):\n"
+       << R"({"tool_call":{"name":"<tool>","arguments":{...}}})" << "\n\n"
+       << "Tool results arrive as `TOOL_RESULT: ...` user messages. Then "
+          "call another tool or answer in prose. Don't call tools for "
+          "pure reasoning / writing tasks.";
     return os.str();
 }
 

@@ -34,7 +34,7 @@ if(NEOCLAW_BUILD_CUDA)
     message(STATUS "neoclaw: CUDA backend enabled (archs=${CMAKE_CUDA_ARCHITECTURES})")
 endif()
 
-project(neoclaw LANGUAGES CXX C VERSION 0.3.0)
+project(neoclaw LANGUAGES CXX C VERSION 0.3.1)
 
 # ---------------------------------------------------------------------------
 # Project-wide C++ settings

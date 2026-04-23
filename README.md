@@ -62,14 +62,22 @@ progress bar.
   otherwise. Same bundle, same binary, both paths — **no separate
   CPU / GPU downloads**.
 
-  Indicative throughput on Gemma-4 E4B Q4_K_M:
+  Indicative throughput on Gemma-4 E4B Q4_K_M (4.6 GB file):
 
-  | Hardware                     | Tokens/sec |
-  |------------------------------|-----------:|
-  | Ryzen 7 5800X (CPU only)     | ~8        |
-  | Apple M-series (CPU only)    | ~15-25    |
-  | RTX 4070 Ti (CUDA)           | ~130      |
-  | RTX 4090                     | ~180      |
+  | Hardware                     | Tokens/sec | % of theoretical max |
+  |------------------------------|-----------:|---------------------:|
+  | Ryzen 7 5800X (CPU only)     | ~8         | ~60% of RAM-bw cap |
+  | Apple M-series (CPU only)    | ~15-25     | varies |
+  | RTX 4070 Ti (CUDA)           | **~100**   | **~89%** of VRAM-bw cap (504 GB/s ÷ 4.5 GB ≈ 112 tok/s) |
+  | RTX 4090                     | ~150-180   | ~85% of 1 TB/s cap |
+
+  Token generation at batch 1 is memory-bandwidth bound — every token
+  reads the full weight tensor out of VRAM once. The 4070 Ti's 100 tok/s
+  is within a hair of its physical ceiling; no software change short of
+  smaller weights (a tinier quant) or wider bandwidth silicon can push
+  past it. Where there *is* headroom is in **not having to re-read**
+  tokens you've already seen — i.e. KV-cache reuse across turns. That's
+  v0.4 territory.
 
 ## Three ingredients
 
