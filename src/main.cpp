@@ -79,7 +79,7 @@ bool confirm_yn(const std::string& prompt) {
 
 void print_banner(const neoclaw::Config& cfg) {
     neoclaw::ui::BannerLines b;
-    b.title    = "neoclaw v0.1 — local C++ coding agent";
+    b.title    = "neoclaw v0.1 - local C++ coding agent";
     b.model    = cfg.model.id;
     b.endpoint = cfg.server.endpoint;
     b.project  = cfg.session.project_root.string();
