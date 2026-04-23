@@ -1,0 +1,78 @@
+// neoclaw/src/config.h — YAML-driven runtime configuration.
+//
+// One struct tree mirroring the example config in config/neoclaw.example.yaml.
+// `load_config(path)` parses a YAML file; `default_config()` returns a
+// sensible baseline (Gemma-4 E4B, localhost:8090, safe tools only).
+#pragma once
+
+#include <filesystem>
+#include <string>
+
+namespace neoclaw {
+
+struct ModelConfig {
+    std::string id        = "unsloth/gemma-4-E4B-it-GGUF";
+    std::string filename  = "gemma-4-E4B-it-Q4_K_M.gguf"; ///< "" = auto-pick best
+};
+
+struct ServerConfig {
+    bool        auto_spawn = true;
+    int         port       = 8090;
+    std::string endpoint   = "http://localhost:8090";
+};
+
+struct AgentConfig {
+    std::string system_prompt =
+        "You are a concise coding assistant. You work on the project in "
+        "the current working directory. Prefer small diffs, explain what "
+        "you are about to do, and ask for confirmation before any "
+        "destructive change.";
+    int max_iterations = 12;
+};
+
+struct BashConfig {
+    bool        enabled        = false;
+    std::string sandbox        = "bwrap";  ///< bwrap | none | opensandbox
+    int         timeout_sec    = 30;
+    bool        allow_network  = false;
+};
+
+struct ToolsConfig {
+    bool       read_file  = true;
+    bool       write_file = true;
+    bool       grep       = true;
+    bool       glob       = true;
+    BashConfig bash{};
+};
+
+struct SessionConfig {
+    std::filesystem::path project_root = std::filesystem::current_path();
+};
+
+struct Config {
+    ModelConfig   model;
+    ServerConfig  server;
+    AgentConfig   agent;
+    ToolsConfig   tools;
+    SessionConfig session;
+};
+
+/// Return a baseline Config. Never throws.
+Config default_config();
+
+/// Load configuration from a YAML file. Fields absent in the YAML keep
+/// their defaults from `default_config()`. Relative `session.project_root`
+/// resolves against the CWD of the caller (not the YAML file path).
+/// Throws std::runtime_error on YAML parse errors.
+Config load_config(const std::filesystem::path& yaml_path);
+
+/// Search for a config file in the conventional order and load whichever
+/// exists first. Returns `default_config()` if none found.
+///
+///   1. $NEOCLAW_CONFIG (if set)
+///   2. ./neoclaw.yaml (in CWD)
+///   3. $XDG_CONFIG_HOME/neoclaw/config.yaml
+///   4. ~/.config/neoclaw/config.yaml
+Config load_config_from_discovery();
+
+} // namespace neoclaw

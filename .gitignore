@@ -1,0 +1,11 @@
+build/
+build-*/
+.cache/
+models/
+*.gguf
+*.safetensors
+compile_commands.json
+.vscode/
+.idea/
+*.swp
+.DS_Store
