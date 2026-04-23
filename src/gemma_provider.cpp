@@ -61,11 +61,20 @@ std::string build_tool_protocol(const std::vector<ChatTool>& tools,
         os << "- " << t.name << "(" << compact_signature(t.parameters) << ") — "
            << t.description << "\n";
     }
-    os << "\nTo call a tool, reply with ONLY this JSON (no prose, no fences):\n"
+    os << "\nWhen to call a tool:\n"
+          "- write_file: ONLY when the user gave an explicit file path to save to.\n"
+          "- read_file / grep / glob: ONLY when the user references existing files\n"
+          "  or asks about project contents.\n"
+          "- bash: ONLY when the user explicitly asks to run a command.\n"
+          "\nWhen NOT to call a tool — answer in prose, with code inside markdown\n"
+          "```fences``` (never via write_file):\n"
+          "- \"write/show/draft/explain me <code>\" without a file path.\n"
+          "- Questions, designs, reasoning, math.\n"
+          "- Greetings and short follow-ups.\n"
+          "\nTo call a tool, reply with ONLY this JSON (no prose, no fences):\n"
        << R"({"tool_call":{"name":"<tool>","arguments":{...}}})" << "\n\n"
-       << "Tool results arrive as `TOOL_RESULT: ...` user messages. Then "
-          "call another tool or answer in prose. Don't call tools for "
-          "pure reasoning / writing tasks.";
+          "Tool results arrive as `TOOL_RESULT: ...` user messages. Then call\n"
+          "another tool or answer in prose.";
     return os.str();
 }
 
