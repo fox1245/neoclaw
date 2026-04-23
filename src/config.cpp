@@ -85,11 +85,14 @@ Config load_config(const fs::path& yaml_path) {
     return cfg;
 }
 
-Config load_config_from_discovery() {
+Config load_config_from_discovery(const fs::path& project_root_hint) {
     std::vector<fs::path> candidates;
 
     if (const char* env = std::getenv("NEOCLAW_CONFIG"); env && *env) {
         candidates.emplace_back(env);
+    }
+    if (!project_root_hint.empty()) {
+        candidates.emplace_back(project_root_hint / "neoclaw.yaml");
     }
     candidates.emplace_back(fs::current_path() / "neoclaw.yaml");
     if (const char* xdg = std::getenv("XDG_CONFIG_HOME"); xdg && *xdg) {

@@ -78,10 +78,18 @@ Config load_config(const std::filesystem::path& yaml_path);
 /// Search for a config file in the conventional order and load whichever
 /// exists first. Returns `default_config()` if none found.
 ///
+/// Discovery order:
 ///   1. $NEOCLAW_CONFIG (if set)
-///   2. ./neoclaw.yaml (in CWD)
-///   3. $XDG_CONFIG_HOME/neoclaw/config.yaml
-///   4. ~/.config/neoclaw/config.yaml
-Config load_config_from_discovery();
+///   2. <project_root>/neoclaw.yaml  (when `project_root_hint` non-empty)
+///   3. ./neoclaw.yaml (in CWD)
+///   4. $XDG_CONFIG_HOME/neoclaw/config.yaml
+///   5. ~/.config/neoclaw/config.yaml
+///
+/// Step 2 matters when the user runs neoclaw from a directory other
+/// than the project root (e.g. invoking from their home with
+/// `neoclaw --project-root /path/to/proj`). Without it the project-local
+/// config gets silently ignored.
+Config load_config_from_discovery(
+    const std::filesystem::path& project_root_hint = {});
 
 } // namespace neoclaw

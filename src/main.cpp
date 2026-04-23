@@ -122,7 +122,7 @@ int main(int argc, char** argv) {
     neoclaw::Config cfg;
     try {
         cfg = cli.config_path.empty()
-            ? neoclaw::load_config_from_discovery()
+            ? neoclaw::load_config_from_discovery(cli.project_root)
             : neoclaw::load_config(cli.config_path);
     } catch (const std::exception& e) {
         std::cerr << "neoclaw: " << e.what() << "\n";
