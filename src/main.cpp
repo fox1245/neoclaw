@@ -9,11 +9,14 @@
 #include "gemma_provider.h"
 #include "sandbox.h"
 #include "tools.h"
+#include "ui.h"
 
 #include <neograph/llm/agent.h>
 #include <neograph/tool.h>
 
 #include <algorithm>
+#include <cctype>
+#include <clocale>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -74,38 +77,40 @@ bool confirm_yn(const std::string& prompt) {
     return line[0] == 'y' || line[0] == 'Y';
 }
 
-std::string shorten(const std::string& s, size_t n) {
-    if (s.size() <= n) return s;
-    return s.substr(0, n) + "…";
-}
-
 void print_banner(const neoclaw::Config& cfg) {
-    std::cout
-      << "\n"
-      << "  ╭───────────────────────────────────────────────────────╮\n"
-      << "  │  neoclaw v0.1 — local C++ coding agent                │\n"
-      << "  │                                                       │\n"
-      << "  │  model    : " << shorten(cfg.model.id, 40)
-      << std::string(std::max<int>(0, 40 - (int)shorten(cfg.model.id, 40).size()), ' ')
-      << "  │\n"
-      << "  │  endpoint : " << shorten(cfg.server.endpoint, 40)
-      << std::string(std::max<int>(0, 40 - (int)shorten(cfg.server.endpoint, 40).size()), ' ')
-      << "  │\n"
-      << "  │  project  : " << shorten(cfg.session.project_root.string(), 40)
-      << std::string(std::max<int>(0, 40 - (int)shorten(cfg.session.project_root.string(), 40).size()), ' ')
-      << "  │\n"
-      << "  │  bash     : " << (cfg.tools.bash.enabled ? "enabled" : "disabled")
-      << " (sandbox=" << cfg.tools.bash.sandbox << ")"
-      << std::string(std::max<int>(0, 18 - (int)cfg.tools.bash.sandbox.size()), ' ')
-      << "  │\n"
-      << "  │                                                       │\n"
-      << "  │  type /help for commands, Ctrl-D or /quit to exit     │\n"
-      << "  ╰───────────────────────────────────────────────────────╯\n\n";
+    neoclaw::ui::BannerLines b;
+    b.title    = "neoclaw v0.1 — local C++ coding agent";
+    b.model    = cfg.model.id;
+    b.endpoint = cfg.server.endpoint;
+    b.project  = cfg.session.project_root.string();
+    b.bash_line = std::string(cfg.tools.bash.enabled ? "enabled" : "disabled")
+                + " (sandbox=" + cfg.tools.bash.sandbox + ")";
+    b.hint     = "type /help for commands, Ctrl-D or /quit to exit";
+    neoclaw::ui::print_banner(b);
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
+    // Enable the user's locale so wcwidth() actually knows how wide a
+    // Korean / em-dash / emoji codepoint is when painting the banner.
+    // Fall back to C.UTF-8 when the environment doesn't set LANG — a
+    // plain "C" locale rejects multi-byte UTF-8 in mbrtowc() and every
+    // em-dash in the banner prints as "???" + a broken width.
+    const char* picked = std::setlocale(LC_ALL, "");
+    auto is_utf8 = [](const char* l) {
+        if (!l) return false;
+        std::string s = l;
+        for (auto& c : s) c = (char)std::tolower((unsigned char)c);
+        return s.find("utf-8") != std::string::npos
+            || s.find("utf8")  != std::string::npos;
+    };
+    if (!is_utf8(picked)) {
+        if (!std::setlocale(LC_ALL, "C.UTF-8")) {
+            std::setlocale(LC_ALL, "en_US.UTF-8");
+        }
+    }
+
     CliArgs cli = parse_cli(argc, argv);
 
     // -----------------------------------------------------------------
@@ -214,7 +219,8 @@ int main(int argc, char** argv) {
     // -----------------------------------------------------------------
     std::string line;
     while (true) {
-        std::cout << "\033[1;32m❯ \033[0m" << std::flush;
+        std::cout << neoclaw::ui::fg_green() << neoclaw::ui::bold()
+                  << "❯ " << neoclaw::ui::reset() << std::flush;
         if (!std::getline(std::cin, line)) { std::cout << "\n"; break; }
         if (line.empty()) continue;
 

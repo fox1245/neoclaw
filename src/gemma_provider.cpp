@@ -1,4 +1,5 @@
 #include "gemma_provider.h"
+#include "ui.h"
 
 #include <neograph/json.h>
 
@@ -236,36 +237,78 @@ ChatCompletion GemmaProvider::complete_stream(
                              // get here; rewrite_for_gemma merges it.
     );
 
-    // 2. Stream through the delegate, accumulating tokens so we can
-    //    inspect the full response for a tool-call JSON block.
-    std::string buffered;
+    // 2. Stream through the delegate. Two things happen per chunk:
+    //    a) feed into the raw buffer so we can parse tool_call later,
+    //    b) strip chat-template artifacts (e.g. `<|im_end|>`, `<end_of_turn>`)
+    //       before handing bytes to the user callback, so the user never
+    //       sees the model's internal control tokens mid-stream.
+    std::string raw_buffered;       ///< Unfiltered — what the model really said.
+    std::string filter_carry;       ///< Cross-chunk boundary holdback for strip.
+    bool        saw_tool_prefix = false;
+
     auto capture = [&](const std::string& tok) {
-        buffered += tok;
-        if (on_chunk) on_chunk(tok);
+        raw_buffered += tok;
+
+        std::string out_tok = tok;
+        ui::strip_chat_artifacts(out_tok, filter_carry);
+
+        // Don't paint half of a tool-call JSON on stdout — as soon as
+        // we see the `{"tool_call"` prefix, stop forwarding tokens.
+        // We'll print the structured tool trace on stderr instead.
+        if (!saw_tool_prefix) {
+            const auto& acc = raw_buffered;
+            if (acc.find("{\"tool_call\"") != std::string::npos) {
+                saw_tool_prefix = true;
+            }
+            if (on_chunk && !out_tok.empty() && !saw_tool_prefix) {
+                on_chunk(out_tok);
+            }
+        }
     };
+
     auto resp = delegate_->complete_stream(p, capture);
+    // Flush anything still held in the carry buffer (e.g. trailing `<`
+    // that turned out not to be a control token).
+    if (!saw_tool_prefix && on_chunk && !filter_carry.empty()) {
+        std::string tail = filter_carry;
+        filter_carry.clear();
+        ui::strip_chat_artifacts(tail, filter_carry);
+        if (!tail.empty()) on_chunk(tail);
+    }
 
-    // Delegate builds resp.message.content from the chunks too, but its
-    // parser may have already stripped control tokens. Prefer our own
-    // buffered text — it's what the model actually said.
-    const std::string& raw = buffered.empty() ? resp.message.content : buffered;
+    // Delegate builds resp.message.content from chunks too, but its
+    // parser may have already stripped things. Prefer our raw buffer.
+    const std::string& raw = raw_buffered.empty() ? resp.message.content
+                                                  : raw_buffered;
 
-    // 3. Look for a tool-call JSON block. Accept it only when it's the
-    //    dominant shape of the response (first substantive JSON object).
+    // 3. Look for a tool-call JSON block.
     if (auto span = find_tool_call_block(raw)) {
         auto body = raw.substr(span->first, span->second - span->first);
         if (auto tc = parse_tool_call(body)) {
             resp.message.tool_calls.clear();
             resp.message.tool_calls.push_back(*tc);
+
             // Keep any prose that preceded the JSON — useful when the
-            // model narrated before the call. Strip the JSON itself.
+            // model narrated before the call. Strip the JSON itself,
+            // plus any control tokens from the prose.
             std::string pre = raw.substr(0, span->first);
+            std::string carry;
+            ui::strip_chat_artifacts(pre, carry);
             resp.message.content = pre;
+
+            // Stderr trace so the user sees the agent's work.
+            std::string args_preview = tc->arguments;
+            if (args_preview.size() > 80) args_preview.resize(80);
+            ui::print_tool_start(tc->name, args_preview);
             return resp;
         }
     }
 
-    resp.message.content = raw;
+    // No tool call — clean up the assistant content for display.
+    std::string clean = raw;
+    std::string carry;
+    ui::strip_chat_artifacts(clean, carry);
+    resp.message.content = clean;
     return resp;
 }
 

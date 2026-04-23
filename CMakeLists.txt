@@ -111,6 +111,7 @@ add_executable(neoclaw
     src/gemma_provider.cpp
     src/sandbox.cpp
     src/tools.cpp
+    src/ui.cpp
 )
 
 target_include_directories(neoclaw PRIVATE
