@@ -80,7 +80,7 @@ bool confirm_yn(const std::string& prompt) {
 
 void print_banner(const neoclaw::Config& cfg) {
     neoclaw::ui::BannerLines b;
-    b.title    = "neoclaw v0.2 - local C++ coding agent";
+    b.title    = "neoclaw v0.3 - local C++ coding agent";
     b.model    = cfg.model.id;
     b.endpoint = (cfg.backend == neoclaw::BackendKind::Local)
                      ? std::string("in-process (TransformerCPP)")

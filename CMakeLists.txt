@@ -5,7 +5,36 @@ cmake_minimum_required(VERSION 3.20)
 # FetchContent. Harmless on older CMake; required on 4.0+.
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
 
-project(neoclaw LANGUAGES CXX C VERSION 0.2.0)
+# ---------------------------------------------------------------------------
+# GPU support (opt-in)
+#
+# When NEOCLAW_BUILD_CUDA=ON, propagate `-DGGML_CUDA=ON` through FetchContent
+# so llama.cpp builds its CUDA backend. At runtime llama discovers the CUDA
+# backend dynamically — if it's there, every tensor offloads to GPU; if it's
+# not (or NVIDIA driver is missing), the CPU kernels handle it. Same binary
+# either way.
+#
+# CUDA toolkit (nvcc) must be available at configure time. Default OFF for
+# maximum portability of the source build; `scripts/package.sh` flips it ON
+# for release tarballs because the perf delta is ~15-20×.
+# ---------------------------------------------------------------------------
+option(NEOCLAW_BUILD_CUDA
+    "Build llama.cpp with CUDA backend (via TransformerCPP). Requires nvcc."
+    OFF)
+if(NEOCLAW_BUILD_CUDA)
+    enable_language(CUDA)
+    set(GGML_CUDA           ON  CACHE BOOL "" FORCE)
+    set(GGML_CUDA_F16       ON  CACHE BOOL "" FORCE)   # half-precision where safe
+    set(CMAKE_CUDA_STANDARD 17  CACHE STRING "" FORCE)
+    if(NOT CMAKE_CUDA_ARCHITECTURES)
+        # Covers Turing (75) through Ada Lovelace (89). Users with newer
+        # silicon (Blackwell, 120) can append via -DCMAKE_CUDA_ARCHITECTURES.
+        set(CMAKE_CUDA_ARCHITECTURES "75;80;86;89" CACHE STRING "" FORCE)
+    endif()
+    message(STATUS "neoclaw: CUDA backend enabled (archs=${CMAKE_CUDA_ARCHITECTURES})")
+endif()
+
+project(neoclaw LANGUAGES CXX C VERSION 0.3.0)
 
 # ---------------------------------------------------------------------------
 # Project-wide C++ settings
@@ -155,12 +184,24 @@ set_target_properties(neoclaw PROPERTIES
     BUILD_WITH_INSTALL_RPATH TRUE
     INSTALL_RPATH "${CMAKE_BINARY_DIR}/bin:$ORIGIN/../lib")
 
+# When CUDA is compiled in, llama.cpp emits an extra backend shared lib
+# (`libggml-cuda.so`) that must end up next to the CPU-side libs at
+# runtime. llama.cpp already links it transitively into ggml, but the
+# file also needs to be discoverable from the install-tree RPATH; the
+# rpath already covers it since it sits in the same bin/ directory.
+if(NEOCLAW_BUILD_CUDA)
+    set(_neoclaw_has_cuda TRUE CACHE INTERNAL "")
+    # CUDAToolkit::cudart is pulled in by llama.cpp's CMake; no extra
+    # target_link_libraries here — just make sure nvcc ran.
+endif()
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 message(STATUS "")
 message(STATUS "neoclaw v${PROJECT_VERSION} configured:")
 message(STATUS "  build type       : ${CMAKE_BUILD_TYPE}")
+message(STATUS "  CUDA backend     : ${NEOCLAW_BUILD_CUDA}")
 message(STATUS "  NeoGraph         : ${neograph_SOURCE_DIR}")
 message(STATUS "  TransformerCPP   : ${transformercpp_SOURCE_DIR}")
 message(STATUS "  yaml-cpp         : ${yaml-cpp_SOURCE_DIR}")

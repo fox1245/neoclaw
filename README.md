@@ -56,9 +56,20 @@ progress bar.
 - `libssl3`, `libstdc++6`, `glibc ≥ 2.34` — installed by default on
   Ubuntu 22.04+, Fedora 37+, Debian 12+, Arch.
 - Optional: `bubblewrap` if you enable the bash tool (see below).
-- Optional: NVIDIA GPU + CUDA drivers. Without a GPU, Gemma-4 E4B runs
-  on CPU at roughly 8-15 tokens/sec; with an RTX 4070 Ti Q4_K_M
-  reaches ~130 tokens/sec.
+- Optional: NVIDIA GPU + CUDA ≥ 12.0 driver. The release tarball ships
+  with the llama.cpp CUDA backend compiled in; llama.cpp picks it at
+  runtime only if a compatible GPU is present and falls back to CPU
+  otherwise. Same bundle, same binary, both paths — **no separate
+  CPU / GPU downloads**.
+
+  Indicative throughput on Gemma-4 E4B Q4_K_M:
+
+  | Hardware                     | Tokens/sec |
+  |------------------------------|-----------:|
+  | Ryzen 7 5800X (CPU only)     | ~8        |
+  | Apple M-series (CPU only)    | ~15-25    |
+  | RTX 4070 Ti (CUDA)           | ~130      |
+  | RTX 4090                     | ~180      |
 
 ## Three ingredients
 
@@ -86,11 +97,24 @@ git clone https://github.com/fox1245/TransformerCPP.git ../TransformerCPP
 
 git clone https://github.com/fox1245/neoclaw.git
 cd neoclaw
+
+# CPU-only build (no CUDA needed):
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 
-# Portable tarball:
+# CUDA build (requires nvcc — ~15-20 min, 4 GPU archs by default):
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEOCLAW_BUILD_CUDA=ON
+cmake --build build -j$(nproc)
+
+# Portable tarball (bundles libggml-cuda.so automatically when present):
 ./scripts/package.sh   # → dist/neoclaw-<ver>-linux-x86_64.tar.gz
+```
+
+Scope the CUDA build to just your GPU for a faster compile:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEOCLAW_BUILD_CUDA=ON \
+      -DCMAKE_CUDA_ARCHITECTURES=89   # Ada Lovelace (RTX 40xx) only
 ```
 
 CMake auto-detects the sibling `../TransformerCPP`; override with

@@ -47,13 +47,32 @@ patchelf --set-rpath '$ORIGIN/../lib' "$pkg/bin/neoclaw" 2>/dev/null || {
 
 # 2. Runtime shared libs. Follow symlinks to the real versioned file
 # AND keep the short SONAME so ld.so finds them.
-for soname in libllama.so.0 libggml.so.0 libggml-base.so.0 libggml-cpu.so.0; do
+# The CUDA backend lib (libggml-cuda.so.0) is only emitted when the
+# build was configured with -DNEOCLAW_BUILD_CUDA=ON. llama.cpp
+# discovers it at runtime if present and silently falls back to CPU
+# when it's not, so the same bundle runs on both GPU and CPU hosts.
+required_libs=(libllama.so.0 libggml.so.0 libggml-base.so.0 libggml-cpu.so.0)
+optional_libs=(libggml-cuda.so.0)
+
+for soname in "${required_libs[@]}"; do
     src="$build/bin/$soname"
     [[ -f "$src" ]] || { echo "[package] missing: $src" >&2; exit 2; }
     real="$(readlink -f "$src")"
     cp "$real" "$pkg/lib/$(basename "$real")"
     ln -sf "$(basename "$real")" "$pkg/lib/$soname"
 done
+
+has_cuda=no
+for soname in "${optional_libs[@]}"; do
+    src="$build/bin/$soname"
+    if [[ -f "$src" ]]; then
+        real="$(readlink -f "$src")"
+        cp "$real" "$pkg/lib/$(basename "$real")"
+        ln -sf "$(basename "$real")" "$pkg/lib/$soname"
+        has_cuda=yes
+    fi
+done
+echo "[package] CUDA backend included: $has_cuda"
 
 # 3. Example config.
 cp "$root/config/neoclaw.example.yaml" "$pkg/config/neoclaw.example.yaml"
