@@ -83,10 +83,14 @@ std::string pad_to(std::string_view s, size_t target) {
     return std::string(s) + std::string(target - w, ' ');
 }
 
+// Unicode box-drawing (╭─╮│╰╯) renders unevenly on terminals with a
+// CJK font fallback — `─` ends up wider than `│` and the right edge
+// drifts, breaking the box. ASCII (`+-|`) renders 1 cell per char in
+// every monospace font on the planet.
 void row(std::string_view content) {
-    std::cout << "  " << fg_cyan() << "│ " << reset()
+    std::cout << "  " << fg_cyan() << "| " << reset()
               << pad_to(content, INNER)
-              << fg_cyan() << " │" << reset() << "\n";
+              << fg_cyan() << " |" << reset() << "\n";
 }
 
 void bar(const char* left, const char* fill, const char* right) {
@@ -135,7 +139,7 @@ std::string field(const char* key, std::string_view value) {
 
 void print_banner(const BannerLines& b) {
     std::cout << "\n";
-    bar("╭", "─", "╮");
+    bar("+", "-", "+");
     row(" " + b.title);
     row("");
     row(field("model",    b.model));
@@ -144,7 +148,7 @@ void print_banner(const BannerLines& b) {
     row(field("bash",     b.bash_line));
     row("");
     row(dim() + " " + b.hint + reset());
-    bar("╰", "─", "╯");
+    bar("+", "-", "+");
     std::cout << "\n";
 }
 
