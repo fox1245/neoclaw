@@ -15,10 +15,18 @@ struct ModelConfig {
     std::string filename  = "gemma-4-E4B-it-Q4_K_M.gguf"; ///< "" = auto-pick best
 };
 
+/// Inference backend selector.
+/// * Local  — load the GGUF in-process via TransformerCPP. No external
+///            server needed. The "download and run" default.
+/// * Http   — talk to a separate OpenAI-compatible server (llama.cpp
+///            server, TransformerCPP http_server_demo, vLLM …). Useful
+///            when the model is pre-loaded in a persistent process or
+///            lives on another host.
+enum class BackendKind { Local, Http };
+
 struct ServerConfig {
-    bool        auto_spawn = true;
     int         port       = 8090;
-    std::string endpoint   = "http://localhost:8090";
+    std::string endpoint   = "http://localhost:8090";  ///< used when backend=http
 };
 
 struct AgentConfig {
@@ -50,6 +58,7 @@ struct SessionConfig {
 };
 
 struct Config {
+    BackendKind   backend = BackendKind::Local;
     ModelConfig   model;
     ServerConfig  server;
     AgentConfig   agent;

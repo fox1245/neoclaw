@@ -44,12 +44,18 @@ Config load_config(const fs::path& yaml_path) {
             + e.what());
     }
 
+    if (auto b = root["backend"]) {
+        std::string name = b.as<std::string>();
+        if (name == "local") cfg.backend = BackendKind::Local;
+        else if (name == "http") cfg.backend = BackendKind::Http;
+        else throw std::runtime_error(
+            "neoclaw: unknown backend '" + name + "' (expected local|http)");
+    }
     if (auto m = root["model"]) {
         maybe(m["id"],       cfg.model.id);
         maybe(m["filename"], cfg.model.filename);
     }
     if (auto s = root["server"]) {
-        maybe(s["auto_spawn"], cfg.server.auto_spawn);
         maybe(s["port"],       cfg.server.port);
         maybe(s["endpoint"],   cfg.server.endpoint);
     }

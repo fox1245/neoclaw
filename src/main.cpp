@@ -7,6 +7,7 @@
 
 #include "config.h"
 #include "gemma_provider.h"
+#include "local_provider.h"
 #include "sandbox.h"
 #include "tools.h"
 #include "ui.h"
@@ -79,9 +80,11 @@ bool confirm_yn(const std::string& prompt) {
 
 void print_banner(const neoclaw::Config& cfg) {
     neoclaw::ui::BannerLines b;
-    b.title    = "neoclaw v0.1 - local C++ coding agent";
+    b.title    = "neoclaw v0.2 - local C++ coding agent";
     b.model    = cfg.model.id;
-    b.endpoint = cfg.server.endpoint;
+    b.endpoint = (cfg.backend == neoclaw::BackendKind::Local)
+                     ? std::string("in-process (TransformerCPP)")
+                     : cfg.server.endpoint;
     b.project  = cfg.session.project_root.string();
     b.bash_line = std::string(cfg.tools.bash.enabled ? "enabled" : "disabled")
                 + " (sandbox=" + cfg.tools.bash.sandbox + ")";
@@ -201,10 +204,27 @@ int main(int argc, char** argv) {
 
     // -----------------------------------------------------------------
     // 3. Provider + Agent.
+    //    Local backend: resolve + download GGUF on first run, then
+    //    load the model into this process.
+    //    Http backend:  point a light adapter at an external server.
     // -----------------------------------------------------------------
-    neoclaw::GemmaProvider::Config pcfg;
-    pcfg.endpoint = cfg.server.endpoint;
-    auto provider = std::make_shared<neoclaw::GemmaProvider>(pcfg);
+    std::shared_ptr<neograph::Provider> provider;
+    try {
+        if (cfg.backend == neoclaw::BackendKind::Local) {
+            std::string path = neoclaw::resolve_model(
+                cfg.model.id, cfg.model.filename);
+            auto model = neoclaw::load_model(path);
+            neoclaw::LocalProvider::Config lcfg;
+            provider = std::make_shared<neoclaw::LocalProvider>(model, lcfg);
+        } else {
+            neoclaw::GemmaProvider::Config pcfg;
+            pcfg.endpoint = cfg.server.endpoint;
+            provider = std::make_shared<neoclaw::GemmaProvider>(pcfg);
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[neoclaw] provider init failed: " << e.what() << "\n";
+        return 3;
+    }
 
     neograph::llm::Agent agent(
         provider,

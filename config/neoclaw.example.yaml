@@ -1,26 +1,36 @@
 # neoclaw configuration example. Copy to ./neoclaw.yaml (project-local) or
 # ~/.config/neoclaw/config.yaml (user-global); the project-local file wins.
 
+# Inference backend.
+#   local — load the GGUF directly into the neoclaw process. No server,
+#           no extra terminal, model weights auto-downloaded on first
+#           run. This is the default.
+#   http  — talk to an external OpenAI-compatible server. Configure
+#           `server.endpoint` below. Useful when a large model is
+#           loaded once and shared across many neoclaw sessions, or
+#           when the model lives on another machine.
+backend: local
+
 model:
   # HuggingFace model ID — TransformerCPP's HubClient downloads GGUF on
-  # first run into ~/.cache/transformercpp/. Common options:
+  # first run into ~/.cache/transformercpp/. Subsequent runs re-use the
+  # cache. Common options:
   #
   #   unsloth/gemma-4-E4B-it-GGUF      # Google Gemma 4 8B instruct
   #   unsloth/gemma-4-E2B-it-GGUF      # Smaller, faster
   #   Qwen/Qwen2.5-Coder-7B-Instruct-GGUF
   #   TheBloke/deepseek-coder-6.7B-instruct-GGUF
+  #
+  # You may also give a local filesystem path to a GGUF here — neoclaw
+  # will skip the Hub entirely if that file exists.
   id: unsloth/gemma-4-E4B-it-GGUF
 
   # Specific GGUF file inside the repo. If omitted, HubClient auto-picks
   # the "best" quant (prefers Q4_K_M).
   filename: gemma-4-E4B-it-Q4_K_M.gguf
 
+# Only consulted when `backend: http`.
 server:
-  # If auto_spawn=true, neoclaw will start a TransformerCPP http_server_demo
-  # subprocess on the configured port. If false, expects an already-running
-  # server at the endpoint (useful when you manage the inference server
-  # separately — e.g. a persistent model across many neoclaw sessions).
-  auto_spawn: true
   port: 8090
   endpoint: http://localhost:8090
 

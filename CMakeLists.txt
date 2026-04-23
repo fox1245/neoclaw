@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.20)
 # FetchContent. Harmless on older CMake; required on 4.0+.
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
 
-project(neoclaw LANGUAGES CXX C VERSION 0.1.0)
+project(neoclaw LANGUAGES CXX C VERSION 0.2.0)
 
 # ---------------------------------------------------------------------------
 # Project-wide C++ settings
@@ -109,17 +109,26 @@ add_executable(neoclaw
     src/main.cpp
     src/config.cpp
     src/gemma_provider.cpp
+    src/local_provider.cpp
     src/sandbox.cpp
     src/tools.cpp
     src/ui.cpp
 )
 
 target_include_directories(neoclaw PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    # TransformerCPP headers are consumed directly by local_provider.cpp
+    # to drive Model::generate in-process. The `transformercpp` target
+    # doesn't export its include dirs publicly, so list them here.
+    ${transformercpp_SOURCE_DIR}/include
+    # llama.h is needed to register our quiet log callback that mutes
+    # llama.cpp's per-load tensor manifest dump.
+    ${transformercpp_SOURCE_DIR}/extern/llama.cpp/include
+    ${transformercpp_SOURCE_DIR}/extern/llama.cpp/ggml/include)
 
 # Link against the NeoGraph orchestration layer + the TransformerCPP
-# inference layer. neoclaw uses the LLM surface of NeoGraph only — not
-# MCP, not checkpoints — so we stay on the minimal core+llm+async split.
+# inference layer. The HTTP backend needs neograph::llm's OpenAIProvider;
+# the local backend needs the transformercpp + llama + ggml chain.
 target_link_libraries(neoclaw PRIVATE
     neograph::core
     neograph::llm
@@ -140,8 +149,11 @@ target_link_libraries(neoclaw PRIVATE
 # BUILD_RPATH points at wherever the shared libs actually landed in this
 # build. Under FetchContent + llama.cpp's defaults that's CMAKE_BINARY_DIR/bin.
 set_target_properties(neoclaw PROPERTIES
-    BUILD_RPATH   "${CMAKE_BINARY_DIR}/bin"
-    INSTALL_RPATH "$ORIGIN/../lib")
+    # Embed both the build-tree lib dir AND the install-tree relative
+    # path into the binary's RPATH so it runs correctly from either
+    # location — no patchelf repacking required when packaging.
+    BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH "${CMAKE_BINARY_DIR}/bin:$ORIGIN/../lib")
 
 # ---------------------------------------------------------------------------
 # Summary
