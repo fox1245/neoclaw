@@ -251,17 +251,16 @@ ChatCompletion GemmaProvider::complete_stream(
     //       sees the model's internal control tokens mid-stream.
     std::string raw_buffered;       ///< Unfiltered — what the model really said.
     std::string filter_carry;       ///< Cross-chunk boundary holdback for strip.
-    std::string lead_buffer;        ///< Leading-edge holdoff — see below.
+    std::string pending;            ///< Trailing holdback — see below.
     bool        saw_tool_prefix = false;
-    bool        lead_flushed    = false;
 
-    // Leading-edge holdoff: hold the first ~24 visible bytes so a
-    // tool-call JSON opener (`{"tool_call"` = 13 chars) is fully
-    // disambiguated from legitimate prose before any byte leaks to
-    // stdout. Without this, a stream like `{`, `"`, `to`, `ol_` would
-    // paint the first few chars of the JSON onto the user's terminal
-    // before our pattern match fires and suppresses the rest.
-    constexpr size_t LEAD_HOLDOFF = 24;
+    // Trailing holdback: always keep the last HOLDBACK bytes in `pending`
+    // so a mid-stream `{"tool_call"` opener is fully disambiguated
+    // before any byte leaks to stdout. The earlier leading-edge-only
+    // version leaked mid-stream tool calls that came after a prose
+    // preamble (e.g. "I will write the file. {"tool_call": ...}").
+    constexpr size_t HOLDBACK = std::char_traits<char>::length(
+        "{\"tool_call\"");  // 13
 
     auto capture = [&](const std::string& tok) {
         raw_buffered += tok;
@@ -273,29 +272,24 @@ ChatCompletion GemmaProvider::complete_stream(
 
         if (raw_buffered.find("{\"tool_call\"") != std::string::npos) {
             saw_tool_prefix = true;
-            lead_buffer.clear();    // never surfaces to stdout
+            pending.clear();
             return;
         }
 
-        if (!lead_flushed) {
-            lead_buffer += out_tok;
-            if (lead_buffer.size() >= LEAD_HOLDOFF) {
-                if (on_chunk && !lead_buffer.empty()) on_chunk(lead_buffer);
-                lead_buffer.clear();
-                lead_flushed = true;
-            }
-            return;
+        pending += out_tok;
+        if (pending.size() > HOLDBACK) {
+            const size_t safe = pending.size() - HOLDBACK;
+            if (on_chunk && safe > 0) on_chunk(pending.substr(0, safe));
+            pending.erase(0, safe);
         }
-
-        if (on_chunk && !out_tok.empty()) on_chunk(out_tok);
     };
 
     auto resp = delegate_->complete_stream(p, capture);
-    // Flush the lead buffer (short assistant replies that never hit
-    // the holdoff threshold) and any control-token-strip carry.
-    if (!saw_tool_prefix && on_chunk && !lead_buffer.empty()) {
-        on_chunk(lead_buffer);
-        lead_buffer.clear();
+    // Flush the holdback tail — if the stream ended without a match it's
+    // all normal prose.
+    if (!saw_tool_prefix && on_chunk && !pending.empty()) {
+        on_chunk(pending);
+        pending.clear();
     }
     if (!saw_tool_prefix && on_chunk && !filter_carry.empty()) {
         std::string tail = filter_carry;

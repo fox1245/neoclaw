@@ -277,17 +277,19 @@ ChatCompletion LocalProvider::complete_stream(
                                                      : cfg_.temperature;
     gc.stop_sequences = {"<end_of_turn>", "<eos>"};
 
-    std::string raw_buffered, filter_carry, lead_buffer;
+    std::string raw_buffered, filter_carry, pending;
     bool saw_tool_prefix = false;
-    bool lead_flushed    = false;
 
-    // Leading-edge buffer: hold back the first N bytes of the stream so
-    // a tool-call-opening `{"tool_call"` prefix is fully matched BEFORE
-    // any of it reaches stdout. 24 bytes is enough to disambiguate
-    // `{"tool_call"` (13 chars) from any plausible prose start. Once the
-    // buffer passes that length and we haven't matched the tool prefix,
-    // flush it and stream live.
-    constexpr size_t LEAD_HOLDOFF = 24;
+    // Trailing holdback: always keep the last HOLDBACK bytes in `pending`
+    // and never flush them to stdout yet — they might grow into a
+    // `{"tool_call"` match on the next chunk. When the accumulated buffer
+    // completes the match, `pending` is dropped entirely (the partial
+    // JSON that leaked the earlier 12 chars through a naïve approach is
+    // safely held here). If generation ends without a match, the tail
+    // flushes cleanly. Covers both leading-edge and mid-stream tool
+    // calls with identical code.
+    constexpr size_t HOLDBACK = std::char_traits<char>::length(
+        "{\"tool_call\"");  // 13
 
     gc.streamer = [&](const std::string& tok) {
         raw_buffered += tok;
@@ -299,21 +301,16 @@ ChatCompletion LocalProvider::complete_stream(
 
         if (raw_buffered.find("{\"tool_call\"") != std::string::npos) {
             saw_tool_prefix = true;
-            lead_buffer.clear();   // discard; never surfaces to stdout
+            pending.clear();   // whatever was in flight is the JSON opener
             return;
         }
 
-        if (!lead_flushed) {
-            lead_buffer += out_tok;
-            if (lead_buffer.size() >= LEAD_HOLDOFF) {
-                if (on_chunk && !lead_buffer.empty()) on_chunk(lead_buffer);
-                lead_buffer.clear();
-                lead_flushed = true;
-            }
-            return;
+        pending += out_tok;
+        if (pending.size() > HOLDBACK) {
+            const size_t safe = pending.size() - HOLDBACK;
+            if (on_chunk && safe > 0) on_chunk(pending.substr(0, safe));
+            pending.erase(0, safe);
         }
-
-        if (on_chunk && !out_tok.empty()) on_chunk(out_tok);
     };
 
     try {
@@ -322,11 +319,11 @@ ChatCompletion LocalProvider::complete_stream(
         throw std::runtime_error(std::string("local inference failed: ") + e.what());
     }
 
-    // Flush anything held in the lead buffer — a short (<24-byte)
-    // assistant reply that never crossed the holdoff threshold.
-    if (!saw_tool_prefix && on_chunk && !lead_buffer.empty()) {
-        on_chunk(lead_buffer);
-        lead_buffer.clear();
+    // Flush the trailing holdback buffer. If the stream ended without
+    // a tool-call match, everything in `pending` is normal prose.
+    if (!saw_tool_prefix && on_chunk && !pending.empty()) {
+        on_chunk(pending);
+        pending.clear();
     }
     if (!saw_tool_prefix && on_chunk && !filter_carry.empty()) {
         std::string tail = filter_carry;
