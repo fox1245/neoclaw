@@ -198,12 +198,10 @@ Set `NEOCLAW_TRACE_GRAPH=1` to dump the per-turn execution trace
 (`__start__ llm tools llm __end__ ...`) — handy when authoring a new
 topology and the wiring isn't doing what you expected.
 
-> **Streaming caveat (v0.5)**: the topology path returns the full
-> assistant turn after the run completes, not token-by-token. Upstream
-> NeoGraph's `LLMCallNode` doesn't override `execute_stream_async`, so
-> the engine's async coroutine path silently drops streaming
-> callbacks. The Agent path (no `topology:` field) still streams
-> normally. Fix lined up for v0.5.x.
+Streaming on the topology path requires NeoGraph at or beyond commit
+`7bcf41e` (the `LLMCallNode::execute_stream_async` override that closes
+the async-path streaming gap). neoclaw's `CMakeLists.txt` tracks that
+via the `NeoGraph` `FetchContent` pin.
 
 ### External server mode (`backend: http`)
 

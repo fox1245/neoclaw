@@ -144,18 +144,17 @@ neograph::json run_topology_turn(
     cfg.thread_id = "neoclaw-repl";
     cfg.input     = neograph::json{{"messages", conversation}};
 
-    // We use the non-streaming `run()` here (not run_stream). NeoGraph's
-    // LLMCallNode overrides `execute_stream` (sync) but NOT
-    // `execute_stream_async`, so under the engine's async coroutine path
-    // (the default) the GraphStreamCallback is silently dropped — no
-    // LLM_TOKEN events ever fire. Rather than depend on that being
-    // fixed upstream, we run to completion and print any messages added
-    // during the turn after the fact. Trade-off: no token-by-token
-    // streaming on the topology path. The Agent path (cfg.topology
-    // empty) still streams normally. v0.5+ TODO is to either subclass
-    // LLMCallNode in neoclaw with the missing override, or push the fix
-    // into NeoGraph.
-    auto result = engine.run(cfg);
+    // Stream tokens through to the user via run_stream. Requires NeoGraph
+    // ≥ the commit that adds `LLMCallNode::execute_stream_async` (without
+    // it the default async path silently drops the GraphStreamCallback
+    // and no LLM_TOKEN events fire). neoclaw's CMake pins a NeoGraph tag
+    // that includes that override.
+    auto result = engine.run_stream(cfg, [&on_token](const auto& evt) {
+        using T = neograph::graph::GraphEvent::Type;
+        if (evt.type == T::LLM_TOKEN && on_token && evt.data.is_string()) {
+            on_token(evt.data.template get<std::string>());
+        }
+    });
 
     // Set NEOCLAW_TRACE_GRAPH=1 to see the per-turn execution trace —
     // useful when authoring a new topology JSON to verify the nodes
@@ -172,31 +171,18 @@ neograph::json run_topology_turn(
     //   { "channels": { "<name>": { "value": ..., "version": N } },
     //     "global_version": N, "final_response": "..." }
     // so the messages array lives at result.output.channels.messages.value.
-    auto msgs = conversation;
+    // NB: NOT `result.output["messages"]` — that always misses on the
+    // engine's wrapped state shape. (Cost: 5 minutes the first time round.)
     if (result.output.contains("channels")
         && result.output["channels"].contains("messages")
         && result.output["channels"]["messages"].contains("value")
         && result.output["channels"]["messages"]["value"].is_array()) {
-        msgs = result.output["channels"]["messages"]["value"];
+        return result.output["channels"]["messages"]["value"];
     }
-
-    if (on_token) {
-        for (size_t i = n_before; i < msgs.size(); ++i) {
-            const auto& m   = msgs[i];
-            const auto role = m.value("role", std::string{});
-            if (role == "assistant") {
-                const auto content = m.value("content", std::string{});
-                if (!content.empty()) on_token(content);
-                // Tool-call announcements come from the local_provider's
-                // ui::print_tool_start at JSON-parse time, so we don't
-                // re-render them here.
-            }
-            // role=="tool" results are surfaced indirectly via the next
-            // assistant turn's content; skipping the verbose dump here.
-        }
-    }
-
-    return msgs;
+    // Fallback: pathological topology that doesn't carry a `messages`
+    // channel — hand back what we sent so the REPL doesn't lose state.
+    (void)n_before;
+    return conversation;
 }
 
 } // namespace neoclaw
