@@ -1,8 +1,8 @@
 // neoclaw/src/gemma_provider.h — NeoGraph Provider adapter for any
 // instruction-tuned LLM served over an OpenAI-compatible endpoint.
 //
-// The underlying server (TransformerCPP http_server_demo, llama.cpp
-// server, vLLM, …) usually doesn't wire OpenAI's `tools` JSON into the
+// The underlying server (llama.cpp server, vLLM, ollama, text-generation-
+// inference, …) usually doesn't wire OpenAI's `tools` JSON into the
 // prompt — the model never sees the tools. We inject a tool-protocol
 // system prompt on the way in, and parse the model's `{"tool_call": {}}`
 // JSON block on the way out into NeoGraph's native `tool_calls` shape.

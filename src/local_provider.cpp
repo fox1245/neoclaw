@@ -1,14 +1,10 @@
 #include "local_provider.h"
+#include "hub.h"
+#include "llama_runner.h"
 #include "ui.h"
 
-#include <transformercpp/generation.h>
-#include <transformercpp/hub.h>
-#include <transformercpp/model.h>
-#include <transformercpp/tokenizer.h>
-
-// llama_log_set lives here. We include the C header directly (not
-// through a TransformerCPP wrapper) so we can silence llama.cpp's
-// chatty per-load diagnostics.
+// llama_log_set lives here. We include the C header directly so we can
+// silence llama.cpp's chatty per-load diagnostics.
 #include <llama.h>
 
 #include <neograph/json.h>
@@ -159,7 +155,7 @@ std::vector<ChatMessage> rewrite_for_local(
 
 // Render a message list into a Gemma-style chat prompt. Real
 // production would pull the template out of the GGUF metadata
-// (`tokenizer.chat_template`). For v0.2 the hard-coded Gemma shape
+// (`tokenizer.chat_template`). For v0.4 the hard-coded Gemma shape
 // is close enough for every instruction-tuned model we've tested.
 std::string render_chat(const std::vector<ChatMessage>& msgs) {
     std::ostringstream os;
@@ -280,9 +276,9 @@ std::optional<ToolCall> parse_tool_call(const std::string& body) {
     }
 }
 
-// Pretty-print progress during HubClient::download. We reserve one
-// line on stderr and repaint with a \r so the user sees "downloading
-// X% of Y MB" without spamming the scrollback.
+// Pretty-print progress during hub::download. We reserve one line on
+// stderr and repaint with a \r so the user sees "downloading X% of Y MB"
+// without spamming the scrollback.
 struct DownloadProgress {
     std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
     void operator()(size_t got, size_t total) {
@@ -311,9 +307,8 @@ struct DownloadProgress {
 // =======================================================================
 // LocalProvider
 // =======================================================================
-LocalProvider::LocalProvider(std::shared_ptr<transformercpp::Model> model,
-                             Config cfg)
-    : model_(std::move(model)), cfg_(std::move(cfg)) {}
+LocalProvider::LocalProvider(std::shared_ptr<LlamaRunner> runner, Config cfg)
+    : runner_(std::move(runner)), cfg_(std::move(cfg)) {}
 
 ChatCompletion LocalProvider::complete(const CompletionParams& params) {
     return complete_stream(params, nullptr);
@@ -326,9 +321,8 @@ ChatCompletion LocalProvider::complete_stream(
     auto msgs = rewrite_for_local(
         params_in.messages, params_in.tools, /*user_system=*/"");
     std::string prompt = render_chat(msgs);
-    auto input = model_->tokenizer().encode(prompt);
 
-    transformercpp::GenerationConfig gc;
+    GenerateConfig gc;
     gc.max_new_tokens = (params_in.max_tokens > 0) ? params_in.max_tokens
                                                     : cfg_.max_tokens;
     gc.temperature    = (params_in.temperature > 0) ? params_in.temperature
@@ -349,7 +343,7 @@ ChatCompletion LocalProvider::complete_stream(
     constexpr size_t HOLDBACK = std::char_traits<char>::length(
         "{\"tool_call\"");  // 13
 
-    gc.streamer = [&](const std::string& tok) {
+    gc.on_piece = [&](const std::string& tok) {
         raw_buffered += tok;
 
         std::string out_tok = tok;
@@ -372,7 +366,7 @@ ChatCompletion LocalProvider::complete_stream(
     };
 
     try {
-        (void)model_->generate(input, gc);
+        (void)runner_->generate(prompt, gc);
     } catch (const std::exception& e) {
         throw std::runtime_error(std::string("local inference failed: ") + e.what());
     }
@@ -451,15 +445,13 @@ std::string resolve_model(const std::string& model_id,
         return fs::canonical(as_path).string();
     }
 
-    // HubClient download — checks its own cache first.
+    // hub::download — checks its own cache first.
     DownloadProgress progress;
     try {
         if (filename.empty()) {
-            return transformercpp::HubClient::download_best_gguf(
-                model_id, std::ref(progress));
+            return hub::download_best_gguf(model_id, std::ref(progress));
         }
-        return transformercpp::HubClient::download(
-            model_id, filename, std::ref(progress));
+        return hub::download(model_id, filename, std::ref(progress));
     } catch (const std::exception& e) {
         throw std::runtime_error(std::string(
             "neoclaw: failed to fetch '") + model_id
@@ -482,19 +474,19 @@ static void llama_log_silent(ggml_log_level level, const char* text, void*) {
     }
 }
 
-std::shared_ptr<transformercpp::Model> load_model(const std::string& path) {
-    // Register the quiet log callback BEFORE AutoModel::from_pretrained
-    // so the first-load tensor manifest dump gets muted.
+std::shared_ptr<LlamaRunner> load_model(const std::string& path) {
+    // Register the quiet log callback BEFORE LlamaRunner::load so the
+    // first-load tensor manifest dump gets muted.
     llama_log_set(llama_log_silent, nullptr);
 
     std::cerr << "[neoclaw] loading model...";
     std::cerr.flush();
     const auto t0 = std::chrono::steady_clock::now();
-    auto uptr = transformercpp::AutoModel::from_pretrained(path);
+    auto runner = LlamaRunner::load(path);
     const long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - t0).count();
     std::cerr << " done (" << ms << " ms)\n";
-    return std::shared_ptr<transformercpp::Model>(uptr.release());
+    return runner;
 }
 
 } // namespace neoclaw

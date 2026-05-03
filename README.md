@@ -4,15 +4,15 @@
 agent that runs entirely on your own hardware.**
 
 One binary. First run downloads the model (Gemma-4 E4B, ~4.6 GB) to
-`~/.cache/transformercpp/`. Subsequent runs are instant. No Python, no
+`~/.cache/neoclaw/`. Subsequent runs are instant. No Python, no
 Docker, no API keys, no data leaving the machine.
 
 ```
   +---------------------------------------------------------+
-  |  neoclaw v0.2 - local C++ coding agent                  |
+  |  neoclaw v0.4 - local C++ coding agent                  |
   |                                                         |
   |  model    : unsloth/gemma-4-E4B-it-GGUF                 |
-  |  endpoint : in-process (TransformerCPP)                 |
+  |  endpoint : in-process (llama.cpp)                      |
   |  project  : /home/me/myproject                          |
   |  bash     : disabled (sandbox=bwrap)                    |
   |                                                         |
@@ -46,7 +46,7 @@ curl -L https://github.com/fox1245/neoclaw/releases/latest/download/neoclaw-linu
 ./neoclaw-*/bin/neoclaw --project-root /path/to/your/project
 ```
 
-First run pulls ~4.6 GB of Gemma-4 GGUF to `~/.cache/transformercpp/`.
+First run pulls ~4.6 GB of Gemma-4 GGUF to `~/.cache/neoclaw/`.
 Roughly 5-15 minutes depending on your connection. Shown as a
 progress bar.
 
@@ -83,26 +83,25 @@ progress bar.
 
 - **[NeoGraph](https://github.com/fox1245/NeoGraph)** — C++ agent
   orchestration (ReAct loop, tool dispatch, token streaming). The
-  whole engine's hot path fits in <300 KB of L3 cache.
-- **[TransformerCPP](https://github.com/fox1245/TransformerCPP)** —
-  C++ transformer inference with Flash-Attention. Loads GGUF models
-  (Gemma 4, Llama 3, Qwen 2.5, DeepSeek-Coder, …) and ships with a
-  HuggingFace Hub client that caches and resumes partial downloads.
+  whole engine's hot path fits in <300 KB of L3 cache. **This is where
+  neoclaw's value lives** — the harness, not the runtime.
+- **[llama.cpp](https://github.com/ggml-org/llama.cpp)** — battle-tested
+  C/C++ inference for GGUF models (Gemma, Llama, Qwen, DeepSeek-Coder,
+  …). Memory-bandwidth-bound at batch 1, and llama.cpp gets within ~89%
+  of the physical ceiling on common hardware — there is nothing left to
+  optimise here that isn't already done. Consumed as a commodity dep.
 - **bubblewrap** — Linux kernel-namespace sandbox. Runs shell commands
   with a read-only filesystem, a bind-mount over your project
   directory, and network unshared by default.
 
+The HuggingFace Hub downloader is a ~250-LOC libcurl module that lives
+in this repo (`src/hub.cpp`); we don't depend on a separate hub library.
+
 ## Build from source
 
-Prereqs: CMake 3.20+, GCC 13+ / Clang 15+, Linux (bwrap). TransformerCPP
-currently gitignores its `extern/` tree, so the build needs a sibling
-`../TransformerCPP` clone with externals populated (single upstream
-setup — see TransformerCPP's README).
+Prereqs: CMake 3.20+, GCC 13+ / Clang 15+, Linux (bwrap), libcurl4-openssl-dev.
 
 ```bash
-git clone https://github.com/fox1245/TransformerCPP.git ../TransformerCPP
-# …follow TransformerCPP's bootstrap to populate extern/ …
-
 git clone https://github.com/fox1245/neoclaw.git
 cd neoclaw
 
@@ -125,10 +124,8 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEOCLAW_BUILD_CUDA=ON \
       -DCMAKE_CUDA_ARCHITECTURES=89   # Ada Lovelace (RTX 40xx) only
 ```
 
-CMake auto-detects the sibling `../TransformerCPP`; override with
-`-DFETCHCONTENT_SOURCE_DIR_TRANSFORMERCPP=/abs/path` if it lives
-elsewhere. NeoGraph and yaml-cpp are fetched by `FetchContent` on
-first configure.
+NeoGraph, llama.cpp, and yaml-cpp are all fetched by `FetchContent` on
+first configure — no sibling clones, no extern/ tree to populate.
 
 ## REPL commands
 
@@ -174,7 +171,7 @@ Config discovery order (first hit wins):
 ### External server mode (`backend: http`)
 
 Point neoclaw at any OpenAI-compatible endpoint — llama.cpp server,
-vLLM, TransformerCPP's `http_server_demo`, … — instead of loading the
+vLLM, ollama, text-generation-inference, … — instead of loading the
 model in-process. Useful when the model is already loaded somewhere
 and shared across sessions, or when it lives on another machine.
 
@@ -196,8 +193,9 @@ with decent JSON discipline works. Sanity-tested:
 | `Qwen/Qwen2.5-Coder-7B-Instruct-GGUF`    |   7 B  | *untested*, likely better for code |
 | `TheBloke/deepseek-coder-6.7B-instruct-GGUF` | 6.7 B | *untested* |
 
-Swap by editing `model.id` in the YAML. TransformerCPP's HubClient
-handles download + cache.
+Swap by editing `model.id` in the YAML. neoclaw's built-in HF Hub
+client downloads + caches into `~/.cache/neoclaw/` (override with
+`NEOCLAW_CACHE_DIR=/path`).
 
 Set `NEOCLAW_LLAMA_VERBOSE=1` to restore llama.cpp's full per-load
 tensor dump if you're debugging a model that won't load.
@@ -220,20 +218,28 @@ still chain reads of files *inside* the project root. Treat neoclaw
 like running a pilot tool over your own dotfiles: fine for personal
 projects, not fine for shared multi-tenant systems.
 
-## Status (v0.2)
+## Status (v0.4)
 
 - ✅ Single binary, auto-download, self-contained bundle
-- ✅ Local in-process inference + remote HTTP fallback
+- ✅ Local in-process inference (llama.cpp, direct) + remote HTTP fallback
 - ✅ Read / Write / Grep / Glob / Bash tools
 - ✅ Path containment, bwrap sandbox, y/N prompts
+- ✅ Built-in HF Hub downloader (no external hub dep)
 
-Coming in v0.3+:
+v0.4 was the **TransformerCPP cutover**: the inference layer is now
+llama.cpp consumed directly, freeing neoclaw to focus on the harness
+(NeoGraph orchestration + tool loop + sandbox + UX) where the actual
+product value lives.
+
+Coming next:
 
 - Diff preview before `write_file` commits
 - `linenoise` / readline for arrow keys + history
 - macOS `sandbox-exec` backend for the bash tool
 - Plan mode for multi-step refactors
 - GGUF chat template auto-detection (drop the hard-coded Gemma shape)
+- KV-cache reuse across turns (the only remaining inference-side win
+  at batch=1 — shaves prefill on multi-turn conversations)
 
 ## License
 

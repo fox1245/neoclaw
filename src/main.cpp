@@ -80,10 +80,10 @@ bool confirm_yn(const std::string& prompt) {
 
 void print_banner(const neoclaw::Config& cfg) {
     neoclaw::ui::BannerLines b;
-    b.title    = "neoclaw v0.3.1 - local C++ coding agent";
+    b.title    = "neoclaw v0.4.0 - local C++ coding agent";
     b.model    = cfg.model.id;
     b.endpoint = (cfg.backend == neoclaw::BackendKind::Local)
-                     ? std::string("in-process (TransformerCPP)")
+                     ? std::string("in-process (llama.cpp)")
                      : cfg.server.endpoint;
     b.project  = cfg.session.project_root.string();
     b.bash_line = std::string(cfg.tools.bash.enabled ? "enabled" : "disabled")

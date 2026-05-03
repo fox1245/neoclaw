@@ -12,9 +12,9 @@
 backend: local
 
 model:
-  # HuggingFace model ID — TransformerCPP's HubClient downloads GGUF on
-  # first run into ~/.cache/transformercpp/. Subsequent runs re-use the
-  # cache. Common options:
+  # HuggingFace model ID — neoclaw downloads the GGUF on first run into
+  # ~/.cache/neoclaw/ (override with NEOCLAW_CACHE_DIR=...). Subsequent
+  # runs re-use the cache. Common options:
   #
   #   unsloth/gemma-4-E4B-it-GGUF      # Google Gemma 4 8B instruct
   #   unsloth/gemma-4-E2B-it-GGUF      # Smaller, faster
@@ -25,7 +25,7 @@ model:
   # will skip the Hub entirely if that file exists.
   id: unsloth/gemma-4-E4B-it-GGUF
 
-  # Specific GGUF file inside the repo. If omitted, HubClient auto-picks
+  # Specific GGUF file inside the repo. If omitted, neoclaw auto-picks
   # the "best" quant (prefers Q4_K_M).
   filename: gemma-4-E4B-it-Q4_K_M.gguf
 

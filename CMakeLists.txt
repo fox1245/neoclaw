@@ -19,7 +19,7 @@ set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
 # for release tarballs because the perf delta is ~15-20×.
 # ---------------------------------------------------------------------------
 option(NEOCLAW_BUILD_CUDA
-    "Build llama.cpp with CUDA backend (via TransformerCPP). Requires nvcc."
+    "Build llama.cpp with CUDA backend. Requires nvcc."
     OFF)
 if(NEOCLAW_BUILD_CUDA)
     enable_language(CUDA)
@@ -34,7 +34,7 @@ if(NEOCLAW_BUILD_CUDA)
     message(STATUS "neoclaw: CUDA backend enabled (archs=${CMAKE_CUDA_ARCHITECTURES})")
 endif()
 
-project(neoclaw LANGUAGES CXX C VERSION 0.3.1)
+project(neoclaw LANGUAGES CXX C VERSION 0.4.0)
 
 # ---------------------------------------------------------------------------
 # Project-wide C++ settings
@@ -50,17 +50,18 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # ---------------------------------------------------------------------------
-# Dependencies via FetchContent
+# Dependencies
 #
-# Everything is fetched from upstream. `neoclaw` is a clone-and-build repo;
-# there is no system-wide NeoGraph/TransformerCPP install step. Pin tags
-# when stabilising a release — `main`/`master` are fine during the v0.x
-# prototype phase.
+# v0.4 architecture: neoclaw is a *harness* application. Inference is a
+# commodity dependency that we consume from llama.cpp directly — no wrapper
+# layer. This frees us to track upstream llama.cpp releases on our own
+# cadence (new quants, KV-cache reuse, speculative decoding) without waiting
+# on a transitive maintainer.
 # ---------------------------------------------------------------------------
 include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
 
-# ----- NeoGraph -----
+# ----- NeoGraph (orchestration / Provider interface / Agent loop) -----
 FetchContent_Declare(
     NeoGraph
     GIT_REPOSITORY https://github.com/fox1245/NeoGraph.git
@@ -77,47 +78,34 @@ set(NEOGRAPH_BUILD_SQLITE    OFF CACHE BOOL "" FORCE)
 set(NEOGRAPH_BUILD_UTIL      OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(NeoGraph)
 
-# ----- TransformerCPP -----
+# ----- llama.cpp (inference runtime, direct) -----
 #
-# TransformerCPP currently expects a fully populated `extern/` tree
-# (safetensors-cpp, sentencepiece, libtorch, onnxruntime) that upstream
-# does NOT commit — those paths are in its .gitignore. A plain
-# FetchContent clone therefore can't build alone.
-#
-# Until TransformerCPP exposes its own FetchContent for those externals,
-# we support two paths:
-#
-#   1. You have a built sibling clone — point CMake at it:
-#        -DFETCHCONTENT_SOURCE_DIR_TRANSFORMERCPP=/path/to/TransformerCPP
-#
-#   2. Nothing set — we auto-detect `../TransformerCPP` next to neoclaw.
-#      If present, we reuse it in place. If missing, we fall back to a
-#      plain clone and emit a warning explaining the extern/ gap.
-if(NOT DEFINED FETCHCONTENT_SOURCE_DIR_TRANSFORMERCPP)
-    set(_neoclaw_sibling "${CMAKE_CURRENT_SOURCE_DIR}/../TransformerCPP")
-    if(EXISTS "${_neoclaw_sibling}/extern/safetensors-cpp/safetensors.hh")
-        set(FETCHCONTENT_SOURCE_DIR_TRANSFORMERCPP
-            "${_neoclaw_sibling}" CACHE PATH "" FORCE)
-        message(STATUS
-            "TransformerCPP: reusing sibling clone at ${_neoclaw_sibling}")
-    else()
-        message(WARNING
-            "TransformerCPP's vendored extern/ tree (safetensors-cpp, "
-            "sentencepiece, …) is gitignored upstream. A fresh "
-            "FetchContent clone will fail to build. Clone TransformerCPP "
-            "separately, populate its extern/ (see its README), and pass "
-            "-DFETCHCONTENT_SOURCE_DIR_TRANSFORMERCPP=/path/to/clone to "
-            "neoclaw's cmake invocation.")
-    endif()
-endif()
-
+# Pinned to b8902 — the build verified against Gemma-4 E4B Q4_K_M during
+# the v0.4 TransformerCPP-removal cutover. Bump the tag to follow upstream;
+# the C API surface neoclaw uses (load_from_file / init_from_model /
+# tokenize / decode / sampler chain / token_to_piece) is stable across
+# recent releases.
+set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_TOOLS    OFF CACHE BOOL "" FORCE)
+set(LLAMA_CURL           OFF CACHE BOOL "" FORCE)  # we do HF download ourselves
 FetchContent_Declare(
-    TransformerCPP
-    GIT_REPOSITORY https://github.com/fox1245/TransformerCPP.git
-    GIT_TAG        master
+    llama
+    GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git
+    GIT_TAG        b8902
     GIT_SHALLOW    TRUE
 )
-FetchContent_MakeAvailable(TransformerCPP)
+FetchContent_MakeAvailable(llama)
+
+# ----- libcurl (HuggingFace Hub downloader) -----
+#
+# Use the system libcurl. Every Linux distro that the release tarball
+# already requires (glibc ≥ 2.34, libssl3) ships libcurl as a system
+# package, and following HF's cross-host CDN redirects (huggingface.co →
+# cdn-lfs.huggingface.co) wants a mature HTTP client — not worth
+# rewriting.
+find_package(CURL REQUIRED)
 
 # ----- yaml-cpp (tiny YAML parser) -----
 FetchContent_Declare(
@@ -138,6 +126,8 @@ add_executable(neoclaw
     src/main.cpp
     src/config.cpp
     src/gemma_provider.cpp
+    src/hub.cpp
+    src/llama_runner.cpp
     src/local_provider.cpp
     src/sandbox.cpp
     src/tools.cpp
@@ -145,36 +135,21 @@ add_executable(neoclaw
 )
 
 target_include_directories(neoclaw PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    # TransformerCPP headers are consumed directly by local_provider.cpp
-    # to drive Model::generate in-process. The `transformercpp` target
-    # doesn't export its include dirs publicly, so list them here.
-    ${transformercpp_SOURCE_DIR}/include
-    # llama.h is needed to register our quiet log callback that mutes
-    # llama.cpp's per-load tensor manifest dump.
-    ${transformercpp_SOURCE_DIR}/extern/llama.cpp/include
-    ${transformercpp_SOURCE_DIR}/extern/llama.cpp/ggml/include)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-# Link against the NeoGraph orchestration layer + the TransformerCPP
-# inference layer. The HTTP backend needs neograph::llm's OpenAIProvider;
-# the local backend needs the transformercpp + llama + ggml chain.
+# Link against the NeoGraph orchestration layer + llama.cpp inference
+# runtime + libcurl for HF downloads. neograph::llm pulls in the HTTP
+# OpenAIProvider that the gemma_provider.cpp HTTP backend reuses.
 target_link_libraries(neoclaw PRIVATE
     neograph::core
     neograph::llm
-    transformercpp
-    yaml-cpp::yaml-cpp)
-
-# llama.cpp + ggml targets are exposed by the add_subdirectory call
-# inside TransformerCPP. Link against the targets directly so CMake
-# resolves dependencies and RPATHs without us guessing output paths.
-# `llama` pulls in `ggml` transitively through llama.cpp's own CMake,
-# but we keep the ggml variants explicit so the single-library split
-# (base / cpu / cuda) is visible at link time.
-target_link_libraries(neoclaw PRIVATE
     llama
     ggml
     ggml-cpu
-    ggml-base)
+    ggml-base
+    CURL::libcurl
+    yaml-cpp::yaml-cpp)
+
 # BUILD_RPATH points at wherever the shared libs actually landed in this
 # build. Under FetchContent + llama.cpp's defaults that's CMAKE_BINARY_DIR/bin.
 set_target_properties(neoclaw PROPERTIES
@@ -184,15 +159,8 @@ set_target_properties(neoclaw PROPERTIES
     BUILD_WITH_INSTALL_RPATH TRUE
     INSTALL_RPATH "${CMAKE_BINARY_DIR}/bin:$ORIGIN/../lib")
 
-# When CUDA is compiled in, llama.cpp emits an extra backend shared lib
-# (`libggml-cuda.so`) that must end up next to the CPU-side libs at
-# runtime. llama.cpp already links it transitively into ggml, but the
-# file also needs to be discoverable from the install-tree RPATH; the
-# rpath already covers it since it sits in the same bin/ directory.
 if(NEOCLAW_BUILD_CUDA)
     set(_neoclaw_has_cuda TRUE CACHE INTERNAL "")
-    # CUDAToolkit::cudart is pulled in by llama.cpp's CMake; no extra
-    # target_link_libraries here — just make sure nvcc ran.
 endif()
 
 # ---------------------------------------------------------------------------
@@ -203,6 +171,7 @@ message(STATUS "neoclaw v${PROJECT_VERSION} configured:")
 message(STATUS "  build type       : ${CMAKE_BUILD_TYPE}")
 message(STATUS "  CUDA backend     : ${NEOCLAW_BUILD_CUDA}")
 message(STATUS "  NeoGraph         : ${neograph_SOURCE_DIR}")
-message(STATUS "  TransformerCPP   : ${transformercpp_SOURCE_DIR}")
+message(STATUS "  llama.cpp        : ${llama_SOURCE_DIR}")
+message(STATUS "  libcurl          : ${CURL_VERSION_STRING}")
 message(STATUS "  yaml-cpp         : ${yaml-cpp_SOURCE_DIR}")
 message(STATUS "")
