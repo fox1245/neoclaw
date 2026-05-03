@@ -290,6 +290,11 @@ projects, not fine for shared multi-tenant systems.
 - ✅ Built-in HF Hub downloader (no external hub dep)
 - ✅ JSON-defined topology swap (`pair.json`, `code-review.json`, …)
 - ✅ Clickable FTXUI mode picker on TTY launch (auto-skipped on pipes / CI)
+- ✅ Ouroboros-inspired topologies: `vibe.json` / `plan-then-act.json` /
+  `code-review-3pass.json` / `spec-first.json` (+ custom node-types
+  `llm_with_prompt` / `score_extract` and the `score_below_0_2`
+  ambiguity-gate condition)
+- ✅ `/paste` multi-line input, `/mode <name>` runtime topology swap
 
 v0.4 was the **TransformerCPP cutover** (inference is now llama.cpp,
 consumed directly). v0.5 leans into the harness positioning: agent
@@ -297,12 +302,58 @@ orchestration is now a JSON file you swap, not a code path. The same
 binary + same model becomes a different persona per topology — exactly
 the "drop a file, change the agent" workflow NeoGraph was built for.
 
-Coming next:
+### Ouroboros parity — what's real vs deferred
 
-- Token-by-token streaming on the topology path (push the
-  `LLMCallNode::execute_stream_async` override into NeoGraph upstream)
-- More bundled topologies: `planner-executor.json`, `debate.json`,
-  `deep-research.json`
+[ouroboros](https://github.com/Q00/ouroboros) is the design lineage
+behind `spec-first.json` and friends. neoclaw v0.5 implements the
+**shape** of its workflow (stage sequence, stage-by-stage prompt
+isolation, math-gate routing) and one of its **mechanics** (single-
+turn ambiguity gate). The harder mechanics — the ones that make
+ouroboros self-evolve rather than run-once — are still ahead.
+
+| Mechanism                                          | v0.5 |
+|----------------------------------------------------|:----:|
+| Interview → Seed math gate (Ambiguity ≤ 0.2)       |  ✅  |
+| Per-stage prompt isolation (`llm_with_prompt`)     |  ✅  |
+| Runtime mode swap (`/mode`)                        |  ✅  |
+| 3-stage Evaluate (Mechanical → Semantic → Consensus) — *single model, three angles* | ⚠️ |
+| Wonder/Reflect feedback (multi-generation loop)    |  ❌  |
+| Ontology similarity convergence (≥ 0.95)           |  ❌  |
+| Stagnation / oscillation detection                 |  ❌  |
+| PAL Router 1×/10×/30× cost-tier escalation         |  ❌  |
+| Multi-Provider consensus (BYOK, multiple keys)     |  ❌  |
+| Replayable EventStore (cross-session)              |  ❌  |
+| 3-component drift (Goal 50% / Constraint 30% / Ontology 20%) | ❌ |
+
+### Roadmap
+
+The deferred ouroboros mechanics share three pieces of plumbing —
+once those land, the rest fall out as a dozen-LOC topology each:
+
+1. **CheckpointStore wiring** (~150 LOC neoclaw side). NeoGraph already
+   ships `SqliteCheckpointStore`; neoclaw's REPL just needs to hold a
+   thread_id across turns and feed it to `engine.run()`. Unlocks
+   ontology-convergence + stagnation conditions: a custom condition
+   reads prior generations from the store, computes similarity, routes
+   accordingly.
+
+2. **Multi-Provider config** (~200 LOC). Today neoclaw assumes one
+   `Provider`. Adding `providers: { fast: ..., standard: ..., frontier: ... }`
+   in YAML + a `model` field on `llm_with_prompt` nodes that picks
+   among them turns the existing 3-pass review into real 1×/10×/30×
+   consensus. The `config.model` plumbing is already there; the gap is
+   neoclaw's single-Provider assumption.
+
+3. **Evolution loop topology** (~100 LOC + a new `loop_until` node-type).
+   `spec-first.json` today runs one turn at a time and relies on the
+   user re-asking. Wrap it in a `loop_until(score_below_0_2)` node and
+   the same JSON becomes a self-driving Interview → Seed cycle.
+
+Other axes (independent of ouroboros parity):
+
+- More bundled topologies: `debate.json`, `deep-research.json`
+- `subgraph` node's `execute_full_stream_async` override (NeoGraph
+  upstream — same shape as the LLMCallNode fix in 7bcf41e)
 - Diff preview before `write_file` commits
 - `linenoise` / readline for arrow keys + history
 - macOS `sandbox-exec` backend for the bash tool
