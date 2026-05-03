@@ -175,11 +175,17 @@ void print_tool_result(const std::string& summary) {
 // still gets caught on the next call.
 // ---------------------------------------------------------------------
 namespace {
-constexpr std::array<std::string_view, 7> kControlTokens = {
+constexpr std::array<std::string_view, 9> kControlTokens = {
     "<|im_end|>",
     "<|im_start|>",
     "<end_of_turn>",
     "<start_of_turn>",
+    // Some Gemma checkpoints occasionally emit slash-variant turn
+    // markers in generated text. Strip them too so the user doesn't
+    // see raw `</start_of_turn>` bleeding through after the real
+    // turn ended.
+    "</end_of_turn>",
+    "</start_of_turn>",
     "<|end_of_text|>",
     "<|eot_id|>",
     "<eos>",

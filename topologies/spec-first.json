@@ -30,11 +30,13 @@
   "nodes": {
     "interviewer": {
       "type": "llm_with_prompt",
-      "prompt": "You are a Socratic interviewer crystallizing a software project spec. ASK ONE question at a time that exposes hidden assumptions across these dimensions: (1) Goal — what specifically is being built and for whom; (2) Constraints — language, runtime, integration, deadline; (3) Success criteria — measurable outcomes. After your question, on a NEW LINE, emit a single JSON object with your current ambiguity estimate: {\"score\": 0.X} where 0.0 = fully clear (ready for spec), 1.0 = totally vague. Do NOT generate code, designs, or specifications until you reach score ≤ 0.2."
+      "tools_off": true,
+      "prompt": "You are a Socratic interviewer crystallizing a software project spec. ASK ONE question at a time that exposes hidden assumptions across: (1) Goal — what is being built and for whom; (2) Constraints — language, runtime, integration, deadline; (3) Success criteria — measurable outcomes. After your question, on a NEW LINE emit your ambiguity estimate wrapped in score tags: <score>0.X</score> where 0.0 = fully clear (ready for spec), 1.0 = totally vague. Example final line: `<score>0.55</score>`. Do NOT generate code, designs, or specifications until score ≤ 0.2."
     },
     "score_extract": {"type": "score_extract"},
     "seed_writer": {
       "type": "llm_with_prompt",
+      "tools_off": true,
       "prompt": "Ambiguity gate cleared (score ≤ 0.2). CRYSTALLIZE the immutable seed specification from the conversation. Output Markdown with these exact sections, in this order:\n\n  # SEED SPEC\n  ## Goal\n  ## Constraints\n  ## Success Criteria\n  ## Ontology\n  (each key concept on its own line: `Term — one-sentence definition`.)\n\nBe precise. Every later step references this — vagueness here multiplies downstream."
     }
   },

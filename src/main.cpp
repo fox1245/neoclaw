@@ -186,51 +186,60 @@ int main(int argc, char** argv) {
 
     // -----------------------------------------------------------------
     // 2. Build tools per config.
+    //
+    // Wrapped in a closure because `/mode <name>` (later in the REPL)
+    // needs to recreate tools when swapping topologies — the engine
+    // takes ownership of the tool unique_ptrs at compile() time, so a
+    // fresh batch is required for each engine instance.
     // -----------------------------------------------------------------
-    std::vector<std::unique_ptr<neograph::Tool>> tools;
-    if (cfg.tools.read_file) {
-        tools.push_back(std::make_unique<neoclaw::ReadFileTool>(
-            cfg.session.project_root));
-    }
-    if (cfg.tools.write_file) {
-        auto confirm = [&](const std::string& rel, const std::string& content) {
-            std::cout << "\n[neoclaw] assistant wants to write "
-                      << content.size() << " bytes to " << rel << "\n";
-            // Preview first ~8 lines for context.
-            std::istringstream is(content);
-            std::string line;
-            int shown = 0;
-            while (std::getline(is, line) && shown < 8) {
-                std::cout << "  | " << line << "\n";
-                ++shown;
-            }
-            if (shown == 8) std::cout << "  | ...\n";
-            return confirm_yn("[neoclaw] write this file?");
-        };
-        tools.push_back(std::make_unique<neoclaw::WriteFileTool>(
-            cfg.session.project_root, confirm));
-    }
-    if (cfg.tools.grep) {
-        tools.push_back(std::make_unique<neoclaw::GrepTool>(
-            cfg.session.project_root));
-    }
-    if (cfg.tools.glob) {
-        tools.push_back(std::make_unique<neoclaw::GlobTool>(
-            cfg.session.project_root));
-    }
-    if (cfg.tools.bash.enabled) {
-        neoclaw::SandboxOptions sbx;
-        sbx.project_root  = cfg.session.project_root;
-        sbx.mode          = neoclaw::parse_sandbox_mode(cfg.tools.bash.sandbox);
-        sbx.timeout_sec   = cfg.tools.bash.timeout_sec;
-        sbx.allow_network = cfg.tools.bash.allow_network;
-        auto confirm = [&](const std::string& cmd) {
-            std::cout << "\n[neoclaw] assistant wants to run: " << cmd << "\n";
-            return confirm_yn("[neoclaw] run this command?");
-        };
-        tools.push_back(std::make_unique<neoclaw::BashTool>(
-            std::move(sbx), confirm));
-    }
+    auto make_tools = [&]() -> std::vector<std::unique_ptr<neograph::Tool>> {
+        std::vector<std::unique_ptr<neograph::Tool>> ts;
+        if (cfg.tools.read_file) {
+            ts.push_back(std::make_unique<neoclaw::ReadFileTool>(
+                cfg.session.project_root));
+        }
+        if (cfg.tools.write_file) {
+            auto confirm = [](const std::string& rel, const std::string& content) {
+                std::cout << "\n[neoclaw] assistant wants to write "
+                          << content.size() << " bytes to " << rel << "\n";
+                std::istringstream is(content);
+                std::string ln;
+                int shown = 0;
+                while (std::getline(is, ln) && shown < 8) {
+                    std::cout << "  | " << ln << "\n";
+                    ++shown;
+                }
+                if (shown == 8) std::cout << "  | ...\n";
+                return confirm_yn("[neoclaw] write this file?");
+            };
+            ts.push_back(std::make_unique<neoclaw::WriteFileTool>(
+                cfg.session.project_root, confirm));
+        }
+        if (cfg.tools.grep) {
+            ts.push_back(std::make_unique<neoclaw::GrepTool>(
+                cfg.session.project_root));
+        }
+        if (cfg.tools.glob) {
+            ts.push_back(std::make_unique<neoclaw::GlobTool>(
+                cfg.session.project_root));
+        }
+        if (cfg.tools.bash.enabled) {
+            neoclaw::SandboxOptions sbx;
+            sbx.project_root  = cfg.session.project_root;
+            sbx.mode          = neoclaw::parse_sandbox_mode(cfg.tools.bash.sandbox);
+            sbx.timeout_sec   = cfg.tools.bash.timeout_sec;
+            sbx.allow_network = cfg.tools.bash.allow_network;
+            auto confirm = [](const std::string& cmd) {
+                std::cout << "\n[neoclaw] assistant wants to run: " << cmd << "\n";
+                return confirm_yn("[neoclaw] run this command?");
+            };
+            ts.push_back(std::make_unique<neoclaw::BashTool>(
+                std::move(sbx), confirm));
+        }
+        return ts;
+    };
+
+    auto tools = make_tools();
     std::cout << "[neoclaw] " << tools.size() << " tool"
               << (tools.size() == 1 ? "" : "s") << " active: ";
     for (size_t i = 0; i < tools.size(); ++i) {
@@ -309,7 +318,76 @@ int main(int argc, char** argv) {
               << "  /quit              Exit (same as Ctrl-D)\n"
               << "  /reset             Clear conversation history\n"
               << "  /run <shell cmd>   Run a shell command directly (bypass LLM)\n"
+              << "  /paste             Multi-line input mode — paste, then `/end` on its own line\n"
+              << "  /mode <name>       Swap topology at runtime (e.g. `/mode pair`,\n"
+              << "                     `/mode code-review-3pass`). `/mode default` returns to\n"
+              << "                     the v0.4 hardcoded Agent ReAct loop. /reset is implied.\n"
               << "\n";
+            continue;
+        }
+        if (line == "/paste") {
+            std::cout << "[neoclaw] paste mode — end with `/end` on its own line\n";
+            std::ostringstream multi;
+            std::string ml;
+            bool first = true;
+            while (std::getline(std::cin, ml)) {
+                if (ml == "/end") break;
+                if (!first) multi << "\n";
+                multi << ml;
+                first = false;
+            }
+            line = multi.str();
+            if (line.empty()) continue;
+            // fall through to "send turn" logic below
+        }
+        if (line.rfind("/mode ", 0) == 0) {
+            std::string spec = line.substr(6);
+            // Trim leading/trailing whitespace.
+            while (!spec.empty() && std::isspace(static_cast<unsigned char>(spec.front()))) spec.erase(0, 1);
+            while (!spec.empty() && std::isspace(static_cast<unsigned char>(spec.back())))  spec.pop_back();
+            if (spec.empty()) {
+                std::cerr << "[neoclaw] /mode needs a topology name (try /help)\n";
+                continue;
+            }
+            try {
+                if (spec == "default" || spec == "agent") {
+                    // Drop engine, build a fresh Agent with new tools.
+                    auto fresh_tools = make_tools();
+                    agent = std::make_unique<neograph::llm::Agent>(
+                        provider, std::move(fresh_tools), cfg.agent.system_prompt);
+                    engine.reset();
+                    cfg.topology.clear();
+                    agent_conv.clear();
+                    topology_conv = neograph::json::array();
+                    std::cerr << "[neoclaw] mode: agent (default ReAct)\n";
+                } else {
+                    // Allow `/mode pair` as shorthand for `/mode pair.json`.
+                    // Only auto-append when the spec has no extension AND
+                    // no explicit path separator — `/mode foo/bar.json`
+                    // and `/mode /abs/path.json` are passed through as-is.
+                    std::string lookup = spec;
+                    if (lookup.find('.')  == std::string::npos
+                     && lookup.find('/')  == std::string::npos
+                     && lookup.find('\\') == std::string::npos) {
+                        lookup += ".json";
+                    }
+                    const auto path = neoclaw::resolve_topology_path(lookup);
+                    auto fresh_tools = make_tools();
+                    auto fresh_engine = neoclaw::compile_topology(
+                        path, provider, std::move(fresh_tools), cfg.agent.system_prompt);
+                    // Only commit the swap after compile succeeds —
+                    // a typo'd topology name keeps the previous engine alive.
+                    engine = std::move(fresh_engine);
+                    agent.reset();
+                    cfg.topology = path.string();
+                    agent_conv.clear();
+                    topology_conv = neograph::json::array();
+                    std::cerr << "[neoclaw] mode: " << path.filename().string() << "\n";
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "[neoclaw] /mode failed: " << e.what()
+                          << " — keeping previous mode\n";
+            }
             continue;
         }
         if (line == "/reset") {

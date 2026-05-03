@@ -21,14 +21,17 @@
   "nodes": {
     "mechanical": {
       "type": "llm_with_prompt",
+      "tools_off": true,
       "prompt": "You are the MECHANICAL reviewer. First pass. Check ONLY the structural / formal layer: syntax errors, undefined references, type mismatches, unhandled error paths, off-by-one risks, missing null/None checks, resource leaks. Output a bulleted list with file:line cites. No prose, no praise. If clean, output exactly: 'MECHANICAL: clean.'"
     },
     "semantic": {
       "type": "llm_with_prompt",
+      "tools_off": true,
       "prompt": "You are the SEMANTIC reviewer. The user submitted code AND the prior MECHANICAL pass is in the conversation above. Now check the meaning layer: does the code actually do what its name/comments claim? Are the abstractions appropriate? Is the algorithm correct? Edge cases the author missed? Cite file:line. Be terse — half a screen at most."
     },
     "consensus": {
       "type": "llm_with_prompt",
+      "tools_off": true,
       "prompt": "You are the CONSENSUS reviewer. Re-read the original submission AND both prior reviews. Resolve any disagreement between MECHANICAL and SEMANTIC. Produce the final verdict in three sections: BLOCKER (must fix before merge), MAJOR (should fix), NIT (optional). One sentence per item with file:line. End with a single-line summary: 'VERDICT: <approve | request-changes | block>'."
     }
   },

@@ -1,19 +1,22 @@
 {
   "_comment": [
     "Plan-then-act — planner LLM emits a numbered plan first, then an",
-    "executor ReAct subgraph carries the plan out with tools. Compresses",
-    "the ouroboros Interview→Seed→Execute spine into two LLM stages",
-    "without the math gates. Suited to medium-complexity tasks where",
-    "the user's intent is clear but the implementation has several",
-    "steps that benefit from being enumerated before any tool fires.",
+    "executor ReAct loop carries it out with tools. Compresses the",
+    "ouroboros Interview→Seed→Execute spine into two LLM stages.",
     "",
-    "Wiring:",
-    "  __start__ → planner (single LLM, prompt-overridden, no tools)",
-    "             → executor (subgraph: pair-style ReAct loop)",
-    "             → __end__",
+    "Wiring (flat — no subgraph):",
+    "  __start__ → planner → executor ⇄ tools → __end__",
     "",
-    "Per-stage prompts override the inherited agent.system_prompt via",
-    "the `llm_with_prompt` node (registered by neoclaw_nodes.cpp)."
+    "Subgraph nodes were avoided here because NeoGraph's base",
+    "GraphNode::execute_full_stream_async causes inner re-entry on the",
+    "streaming path; flat wiring sidesteps that until subgraph gets",
+    "its own override upstream.",
+    "",
+    "Note: the plan IS shown to the user. Earlier iterations tried to",
+    "hide it inside `<plan>...</plan>` tags via the StreamSuppressor,",
+    "but small models (Gemma 4B) do not reliably emit the closing tag —",
+    "the suppressor would then swallow the executor's output too. The",
+    "plan is useful context anyway, so we keep it visible."
   ],
   "name": "plan_then_act",
   "channels": {
@@ -22,33 +25,21 @@
   "nodes": {
     "planner": {
       "type": "llm_with_prompt",
-      "prompt": "You are a planning specialist. Given the user's coding task, output a numbered plan of 3–7 concrete steps. Each step is one sentence. Do NOT call tools, do NOT write code, do NOT execute anything. End your reply with the line: PLAN COMPLETE."
+      "tools_off": true,
+      "prompt": "You are a planning specialist. Given the user's coding task, output a numbered plan of 3–7 concrete steps. Each step is one sentence. Do NOT write code, do NOT execute anything, do NOT call tools. Format example:\n\n## Plan\n1. First step.\n2. Second step.\n3. Third step.\n\nThat is your entire output. The executor stage that follows will read the plan from the conversation and carry it out with tools."
     },
-    "executor": {
-      "type": "subgraph",
-      "definition": {
-        "name": "executor_inner",
-        "channels": {"messages": {"type": "list", "reducer": "append"}},
-        "nodes": {
-          "llm":   {"type": "llm_call"},
-          "tools": {"type": "tool_dispatch"}
-        },
-        "edges": [
-          {"from": "__start__", "to": "llm"},
-          {
-            "from": "llm",
-            "type": "conditional",
-            "condition": "has_tool_calls",
-            "routes": {"true": "tools", "false": "__end__"}
-          },
-          {"from": "tools", "to": "llm"}
-        ]
-      }
-    }
+    "executor": {"type": "llm_call"},
+    "tools":    {"type": "tool_dispatch"}
   },
   "edges": [
     {"from": "__start__", "to": "planner"},
     {"from": "planner",   "to": "executor"},
-    {"from": "executor",  "to": "__end__"}
+    {
+      "from": "executor",
+      "type": "conditional",
+      "condition": "has_tool_calls",
+      "routes": {"true": "tools", "false": "__end__"}
+    },
+    {"from": "tools", "to": "executor"}
   ]
 }

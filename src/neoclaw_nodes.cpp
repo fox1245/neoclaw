@@ -54,6 +54,20 @@ private:
             if (config.contains("model") && config["model"].is_string()) {
                 out.model = config["model"].template get<std::string>();
             }
+            // `tools_off: true` strips the tool list for this node only.
+            // The local_provider's system-prompt rewriter prepends a
+            // tool-protocol prompt whenever NodeContext.tools is non-
+            // empty — for planner / reviewer / interviewer / seed-writer
+            // nodes that should produce prose only, this pollutes the
+            // model's context with "to call a tool, emit JSON…" rules
+            // and small models (Gemma 4B) get visibly confused. Setting
+            // tools_off=true here keeps tools available to *other*
+            // nodes (e.g. an executor subgraph) while sparing the
+            // single-shot prose stages.
+            if (config.contains("tools_off") && config["tools_off"].is_boolean()
+                && config["tools_off"].template get<bool>()) {
+                out.tools.clear();
+            }
         }
         return out;
     }
@@ -93,7 +107,32 @@ public:
 
 private:
     static double parse_score_lenient(const std::string& text) {
-        // Try strict full-message parse first.
+        // Preferred form: `<score>0.6</score>` — easy to stream-strip
+        // from user-visible output, easy to parse here. Also handles
+        // the open-only case `<score>0.6` where a small model
+        // truncated before emitting `</score>`: we parse as far as
+        // the next non-numeric character.
+        if (const auto a = text.find("<score>");
+            a != std::string::npos) {
+            const size_t p   = a + 7;  // past `<score>`
+            const auto   b   = text.find("</score>", p);
+            const size_t end = (b != std::string::npos) ? b : text.size();
+            size_t q = p;
+            while (q < end) {
+                char c = text[q];
+                if ((c >= '0' && c <= '9') || c == '.' || c == '-'
+                     || c == '+' || c == 'e' || c == 'E') ++q;
+                else break;
+            }
+            if (q > p) {
+                try {
+                    return std::stod(text.substr(p, q - p));
+                } catch (...) { /* fall through to JSON form */ }
+            }
+        }
+
+        // Backward-compat: `{"score": 0.6}`. Try strict full-parse
+        // first, then a tolerant substring scan for prose-wrapped JSON.
         try {
             const auto j = json::parse(text);
             if (j.is_object() && j.contains("score")
@@ -102,10 +141,6 @@ private:
             }
         } catch (...) { /* fall through */ }
 
-        // Find the substring `"score"` and parse forward through the
-        // first numeric literal. Survives prose preamble + markdown
-        // fences without paying for a full JSON parse of arbitrary
-        // pre/post content.
         const auto k = text.find("\"score\"");
         if (k == std::string::npos) return 1.0;
         size_t p = k + 7;  // past `"score"`
@@ -113,7 +148,6 @@ private:
         while (p < text.size() && (text[p] == ' ' || text[p] == '\t'
                                     || text[p] == ':' || text[p] == '\n')) ++p;
         if (p >= text.size()) return 1.0;
-        // Read numeric literal (digits, dot, sign, e).
         size_t q = p;
         while (q < text.size()) {
             char c = text[q];

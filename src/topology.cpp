@@ -5,8 +5,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <functional>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 #if defined(__linux__)
 #  include <unistd.h>
@@ -32,6 +35,104 @@ fs::path exe_dir() {
 #endif
     return fs::current_path();
 }
+
+// Sliding-window stream-output suppressor.
+//
+// Hides occurrences of `<open>...<close>` spans from the user-visible
+// token stream while still letting the *full* span land in the engine's
+// message channel (where score_extract / downstream nodes can parse
+// it). Used to keep "control" payloads emitted by the LLM out of the
+// REPL — e.g. spec-first.json's interviewer wraps its ambiguity score
+// in `<score>0.6</score>`, plan-then-act.json wraps its plan in
+// `<plan>…</plan>`, and we don't want either bleeding into the prose
+// the user reads.
+//
+// Implementation: buffer the streamed text. Emit prefixes that are
+// definitely outside any span. When an `<open>` lands, swallow until
+// the matching `<close>`. Trailing bytes that *could* be a partial
+// open-tag prefix are held back until enough bytes arrive to decide.
+class StreamSuppressor {
+public:
+    using Sink = std::function<void(const std::string&)>;
+
+    explicit StreamSuppressor(std::vector<std::pair<std::string, std::string>> spans)
+        : spans_(std::move(spans)) {}
+
+    void feed(const std::string& chunk, const Sink& sink) {
+        buf_ += chunk;
+        while (true) {
+            if (inside_idx_ >= 0) {
+                const auto& close = spans_[static_cast<size_t>(inside_idx_)].second;
+                const auto pos = buf_.find(close);
+                if (pos == std::string::npos) {
+                    // Still inside — buffer everything, emit nothing.
+                    return;
+                }
+                buf_.erase(0, pos + close.size());
+                inside_idx_ = -1;
+            }
+            // Outside. Find earliest open tag, OR earliest "could be a
+            // partial open" suffix at end of buf_.
+            size_t earliest = std::string::npos;
+            int    which    = -1;
+            for (size_t i = 0; i < spans_.size(); ++i) {
+                auto p = buf_.find(spans_[i].first);
+                if (p != std::string::npos && (earliest == std::string::npos
+                                                || p < earliest)) {
+                    earliest = p;
+                    which    = static_cast<int>(i);
+                }
+            }
+            if (earliest != std::string::npos) {
+                if (earliest > 0 && sink) sink(buf_.substr(0, earliest));
+                buf_.erase(0, earliest + spans_[static_cast<size_t>(which)].first.size());
+                inside_idx_ = which;
+                continue;  // loop to look for close
+            }
+            // No full open tag. Compute the safe-to-emit length:
+            // anything except a trailing prefix that could grow into
+            // an open tag on the next chunk.
+            size_t safe_end = buf_.size();
+            for (const auto& [open, _close] : spans_) {
+                for (size_t k = 1; k < open.size() && k <= buf_.size(); ++k) {
+                    if (buf_.compare(buf_.size() - k, k, open, 0, k) == 0) {
+                        if (buf_.size() - k < safe_end) safe_end = buf_.size() - k;
+                        break;
+                    }
+                }
+            }
+            if (safe_end > 0 && sink) sink(buf_.substr(0, safe_end));
+            buf_.erase(0, safe_end);
+            return;
+        }
+    }
+
+    void flush(const Sink& sink) {
+        // End-of-stream: emit only content that's *outside* any span.
+        // Trailing unterminated-span content is dropped — the model
+        // started a control region and ran out of turn before closing
+        // it; safer to hide than to leak the half-baked metadata.
+        if (inside_idx_ < 0 && !buf_.empty() && sink) sink(buf_);
+        buf_.clear();
+        inside_idx_ = -1;
+    }
+
+    // Per-node reset. Called at NODE_END so an unterminated span in
+    // node A doesn't continue to swallow node B's streamed tokens.
+    // Any inside-span buffer is dropped silently (it was control
+    // payload anyway); outside-span trailing safe content gets
+    // emitted before the reset.
+    void reset_at_node_boundary(const Sink& sink) {
+        if (inside_idx_ < 0 && !buf_.empty() && sink) sink(buf_);
+        buf_.clear();
+        inside_idx_ = -1;
+    }
+
+private:
+    std::vector<std::pair<std::string, std::string>> spans_;
+    std::string buf_;
+    int         inside_idx_ = -1;
+};
 
 // Load a JSON document from disk. Errors include the file path so a
 // typo in the YAML's `topology:` field is immediately obvious.
@@ -165,12 +266,27 @@ neograph::json run_topology_turn(
     // it the default async path silently drops the GraphStreamCallback
     // and no LLM_TOKEN events fire). neoclaw's CMake pins a NeoGraph tag
     // that includes that override.
-    auto result = engine.run_stream(cfg, [&on_token](const auto& evt) {
+    //
+    // The StreamSuppressor wrap hides span markers used by spec-first /
+    // plan-then-act / 3-pass-review topologies (`<score>…</score>`,
+    // `<plan>…</plan>`) from the user's terminal while keeping the full
+    // text in the message channel for downstream nodes to parse.
+    StreamSuppressor suppressor({
+        {"<score>", "</score>"},
+        {"<plan>",  "</plan>"},
+    });
+    auto result = engine.run_stream(cfg, [&](const auto& evt) {
         using T = neograph::graph::GraphEvent::Type;
         if (evt.type == T::LLM_TOKEN && on_token && evt.data.is_string()) {
-            on_token(evt.data.template get<std::string>());
+            suppressor.feed(evt.data.template get<std::string>(), on_token);
+        } else if (evt.type == T::NODE_END) {
+            // Reset suppressor at every node boundary so an unterminated
+            // span in one node (e.g. planner's `<plan>` minus `</plan>`)
+            // doesn't continue to swallow the next node's tokens.
+            if (on_token) suppressor.reset_at_node_boundary(on_token);
         }
     });
+    if (on_token) suppressor.flush(on_token);
 
     // Set NEOCLAW_TRACE_GRAPH=1 to see the per-turn execution trace —
     // useful when authoring a new topology JSON to verify the nodes
@@ -181,6 +297,11 @@ neograph::json run_topology_turn(
         for (const auto& n : result.execution_trace)
             std::fprintf(stderr, " %s", n.c_str());
         std::fprintf(stderr, "\n");
+        if (const char* dump = std::getenv("NEOCLAW_DUMP_STATE");
+            dump && *dump && *dump != '0') {
+            std::fprintf(stderr, "[topology] state: %s\n",
+                          result.output.dump().c_str());
+        }
     }
 
     // GraphState serializes as
