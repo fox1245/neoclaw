@@ -107,6 +107,40 @@ FetchContent_MakeAvailable(llama)
 # rewriting.
 find_package(CURL REQUIRED)
 
+# ----- FTXUI (clickable TUI for the mode picker) -----
+#
+# When neoclaw is launched on a TTY without `topology:` set in YAML, we
+# pop a small radiobox listing the bundled topologies (pair / code-
+# review / …) and the user picks one with arrows-or-mouse → Enter.
+# Esc falls back to the v0.5 Agent default. Pure C++17, no external
+# deps, ~1 MB statically-linked. We keep it OFF for headless builds
+# (e.g. cibuildwheel) where the picker is never reachable anyway.
+option(NEOCLAW_BUILD_TUI
+    "Build the FTXUI mode picker. OFF strips the picker — neoclaw still runs but topology must be set in YAML or via env."
+    ON)
+if(NEOCLAW_BUILD_TUI)
+    set(FTXUI_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
+    set(FTXUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(FTXUI_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+    # Build FTXUI static so the release tarball stays a single-binary
+    # drop. We already PIC-ify everything (CMAKE_POSITION_INDEPENDENT_CODE
+    # above) so this links cleanly into our PIE executable. Saves us
+    # adding three .so paths to the install RPATH.
+    set(FTXUI_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIBS       OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        ftxui
+        GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
+        # Pinned to the verified build (mode picker layout + mouse SGR-1006
+        # tracking + Radiobox detail panel verified against this commit).
+        # Bump the tag to follow upstream — FTXUI's component API is
+        # stable across minor releases.
+        GIT_TAG        03224dcaf7f9a059dbb13cd2977d3d06729107ed
+        GIT_SHALLOW    FALSE
+    )
+    FetchContent_MakeAvailable(ftxui)
+endif()
+
 # ----- yaml-cpp (tiny YAML parser) -----
 FetchContent_Declare(
     yaml-cpp
@@ -133,6 +167,7 @@ add_executable(neoclaw
     src/tools.cpp
     src/topology.cpp
     src/ui.cpp
+    $<$<BOOL:${NEOCLAW_BUILD_TUI}>:${CMAKE_CURRENT_SOURCE_DIR}/src/mode_picker.cpp>
 )
 
 target_include_directories(neoclaw PRIVATE
@@ -150,6 +185,14 @@ target_link_libraries(neoclaw PRIVATE
     ggml-base
     CURL::libcurl
     yaml-cpp::yaml-cpp)
+
+if(NEOCLAW_BUILD_TUI)
+    target_link_libraries(neoclaw PRIVATE
+        ftxui::screen
+        ftxui::dom
+        ftxui::component)
+    target_compile_definitions(neoclaw PRIVATE NEOCLAW_HAVE_TUI=1)
+endif()
 
 # BUILD_RPATH points at wherever the shared libs actually landed in this
 # build. Under FetchContent + llama.cpp's defaults that's CMAKE_BINARY_DIR/bin.

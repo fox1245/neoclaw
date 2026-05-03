@@ -13,6 +13,10 @@
 #include "topology.h"
 #include "ui.h"
 
+#if NEOCLAW_HAVE_TUI
+#  include "mode_picker.h"
+#endif
+
 #include <neograph/graph/engine.h>
 #include <neograph/llm/agent.h>
 #include <neograph/tool.h>
@@ -146,6 +150,30 @@ int main(int argc, char** argv) {
                   << cfg.session.project_root << "\n";
         return 2;
     }
+
+    // -----------------------------------------------------------------
+    // 1b. Interactive mode picker (FTXUI radiobox).
+    //
+    // When `topology:` is unset in YAML AND we're attached to a real
+    // TTY, pop a one-screen picker so a fresh user doesn't have to know
+    // about `topology:` / file paths to choose a persona. Esc / Ctrl-C
+    // / the explicit "Agent default" row all leave cfg.topology empty,
+    // preserving the v0.5 default behaviour for everyone who skips.
+    //
+    // CI / pipes / `--config foo.yaml` with topology pre-set: no UI.
+    // -----------------------------------------------------------------
+#if NEOCLAW_HAVE_TUI
+    if (cfg.topology.empty() && neoclaw::is_picker_runnable()) {
+        const auto dir = neoclaw::default_topologies_dir();
+        if (!dir.empty()) {
+            auto picked = neoclaw::pick_mode_tui(dir);
+            if (!picked.skipped) {
+                cfg.topology = picked.topology_path;
+                std::cerr << "[neoclaw] picked: " << picked.topology_name << "\n";
+            }
+        }
+    }
+#endif
 
     print_banner(cfg);
 

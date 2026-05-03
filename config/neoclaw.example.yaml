@@ -40,7 +40,12 @@ model:
 #                              # review-flavoured agent.system_prompt
 #                              # and tools.write_file = false)
 #
-# Empty / unset = the v0.4 in-process Agent loop (unchanged).
+# Empty / unset:
+#   - On a TTY, neoclaw shows a clickable FTXUI radiobox listing every
+#     bundled topology so you can pick interactively. Esc or the
+#     "Agent default" row falls back to the v0.4 hardcoded ReAct loop.
+#   - On a pipe / CI / non-TTY, the picker auto-skips and we go
+#     straight to the v0.4 Agent loop.
 
 # Only consulted when `backend: http`.
 server:

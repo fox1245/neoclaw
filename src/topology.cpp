@@ -56,6 +56,22 @@ neograph::json read_json_file(const fs::path& p) {
 // =======================================================================
 // Path resolution
 // =======================================================================
+fs::path default_topologies_dir() {
+    const fs::path here = fs::current_path();
+    const fs::path bin  = exe_dir();
+    const std::vector<fs::path> candidates = {
+        here / "topologies",
+        bin  / "topologies",
+        bin  / ".." / "share" / "neoclaw" / "topologies",
+    };
+    for (const auto& c : candidates) {
+        std::error_code ec;
+        if (fs::exists(c, ec) && fs::is_directory(c, ec) && !ec)
+            return fs::weakly_canonical(c);
+    }
+    return {};
+}
+
 fs::path resolve_topology_path(const std::string& spec) {
     if (spec.empty())
         throw std::runtime_error("neoclaw: empty topology spec");

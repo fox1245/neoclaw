@@ -172,8 +172,13 @@ Config discovery order (first hit wins):
 
 NeoGraph compiles agent orchestration from a JSON definition — nodes,
 edges, channels, conditional routing — and `GraphEngine::compile(json,
-context)` is the entry point. neoclaw v0.5+ exposes that switch as a
-single config field:
+context)` is the entry point. neoclaw exposes that switch two ways:
+the YAML field below, or — when neoclaw boots on a TTY without
+`topology:` set — a clickable [FTXUI](https://github.com/ArthurSonzogni/FTXUI)
+mode picker that lists every bundled topology, lets you pick with
+arrows or mouse, and Esc / "Agent default" to fall back to the v0.5
+hardcoded ReAct loop. CI / pipe-redirected stdin auto-skips the
+picker, no flag needed.
 
 ```yaml
 topology: pair.json   # default ReAct pair-programmer (the v0.4 behaviour)
@@ -261,6 +266,7 @@ projects, not fine for shared multi-tenant systems.
 - ✅ Path containment, bwrap sandbox, y/N prompts
 - ✅ Built-in HF Hub downloader (no external hub dep)
 - ✅ JSON-defined topology swap (`pair.json`, `code-review.json`, …)
+- ✅ Clickable FTXUI mode picker on TTY launch (auto-skipped on pipes / CI)
 
 v0.4 was the **TransformerCPP cutover** (inference is now llama.cpp,
 consumed directly). v0.5 leans into the harness positioning: agent

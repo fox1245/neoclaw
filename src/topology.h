@@ -28,6 +28,12 @@
 
 namespace neoclaw {
 
+/// Return the first existing `topologies/` directory the binary can
+/// find, using the same search order as `resolve_topology_path`. Used
+/// by the mode picker to enumerate bundled topologies. Returns an
+/// empty path when no candidate directory exists.
+std::filesystem::path default_topologies_dir();
+
 /// Resolve a `topology:` config value to an absolute path.
 ///
 /// Absolute paths are returned unchanged. Relative paths are searched
