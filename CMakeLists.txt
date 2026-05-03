@@ -163,6 +163,7 @@ add_executable(neoclaw
     src/hub.cpp
     src/llama_runner.cpp
     src/local_provider.cpp
+    src/neoclaw_nodes.cpp
     src/sandbox.cpp
     src/tools.cpp
     src/topology.cpp

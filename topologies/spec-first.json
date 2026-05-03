@@ -1,0 +1,52 @@
+{
+  "_comment": [
+    "Specification-first workflow with an ambiguity gate, after",
+    "ouroboros's Interview → Seed transition.",
+    "",
+    "Per turn:",
+    "  1. interviewer asks ONE Socratic question + emits a JSON",
+    "     ambiguity score {\"score\": 0.X} (X=0 fully clear, 1 vague).",
+    "  2. score_extract parses that into the `score` channel.",
+    "  3. score_below_0_2 condition routes:",
+    "       - ready  → seed_writer crystallizes the immutable spec.",
+    "       - more   → __end__ (this turn produced just a question;",
+    "                  user replies, next turn the score may drop.)",
+    "",
+    "Wiring:",
+    "  __start__ → interviewer → score_extract",
+    "                                     ├─ready → seed_writer → __end__",
+    "                                     └─more  → __end__",
+    "",
+    "Once the seed is written, you typically /reset and switch the",
+    "topology to plan-then-act.json or pair.json to actually build",
+    "against the spec. Future v0.6 axis: chain spec-first → execute",
+    "→ evaluate-3pass in one graph for the full Ouroboros loop."
+  ],
+  "name": "spec_first",
+  "channels": {
+    "messages": {"type": "list",  "reducer": "append"},
+    "score":    {"type": "value", "reducer": "overwrite"}
+  },
+  "nodes": {
+    "interviewer": {
+      "type": "llm_with_prompt",
+      "prompt": "You are a Socratic interviewer crystallizing a software project spec. ASK ONE question at a time that exposes hidden assumptions across these dimensions: (1) Goal — what specifically is being built and for whom; (2) Constraints — language, runtime, integration, deadline; (3) Success criteria — measurable outcomes. After your question, on a NEW LINE, emit a single JSON object with your current ambiguity estimate: {\"score\": 0.X} where 0.0 = fully clear (ready for spec), 1.0 = totally vague. Do NOT generate code, designs, or specifications until you reach score ≤ 0.2."
+    },
+    "score_extract": {"type": "score_extract"},
+    "seed_writer": {
+      "type": "llm_with_prompt",
+      "prompt": "Ambiguity gate cleared (score ≤ 0.2). CRYSTALLIZE the immutable seed specification from the conversation. Output Markdown with these exact sections, in this order:\n\n  # SEED SPEC\n  ## Goal\n  ## Constraints\n  ## Success Criteria\n  ## Ontology\n  (each key concept on its own line: `Term — one-sentence definition`.)\n\nBe precise. Every later step references this — vagueness here multiplies downstream."
+    }
+  },
+  "edges": [
+    {"from": "__start__",     "to": "interviewer"},
+    {"from": "interviewer",   "to": "score_extract"},
+    {
+      "from": "score_extract",
+      "type": "conditional",
+      "condition": "score_below_0_2",
+      "routes": {"ready": "seed_writer", "more": "__end__"}
+    },
+    {"from": "seed_writer",   "to": "__end__"}
+  ]
+}

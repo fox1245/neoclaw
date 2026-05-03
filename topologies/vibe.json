@@ -1,0 +1,37 @@
+{
+  "_comment": [
+    "Vibe coding mode — pair-isomorphic ReAct loop tuned for high-",
+    "autonomy iteration. Wiring is identical to pair.json; the *vibe*",
+    "comes from the system_prompt you pair it with. Suggested addition",
+    "in your neoclaw.yaml:",
+    "",
+    "  agent:",
+    "    system_prompt: |",
+    "      You are a fast, autonomous coding partner. Skip clarifying",
+    "      questions when intent is reasonable — just try, observe,",
+    "      fix. Pick the smallest change that compiles. Don't ask for",
+    "      permission on routine edits. Iterate; ship.",
+    "    max_iterations: 24      # let the loop go further",
+    "",
+    "Wiring: __start__ → llm ⇄ tools → __end__",
+    "        (Yao et al. 2022, with looser human-in-the-loop discipline)"
+  ],
+  "name": "vibe",
+  "channels": {
+    "messages": {"type": "list", "reducer": "append"}
+  },
+  "nodes": {
+    "llm":   {"type": "llm_call"},
+    "tools": {"type": "tool_dispatch"}
+  },
+  "edges": [
+    {"from": "__start__", "to": "llm"},
+    {
+      "from": "llm",
+      "type": "conditional",
+      "condition": "has_tool_calls",
+      "routes": {"true": "tools", "false": "__end__"}
+    },
+    {"from": "tools", "to": "llm"}
+  ]
+}

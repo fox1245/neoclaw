@@ -8,6 +8,7 @@
 #include "config.h"
 #include "gemma_provider.h"
 #include "local_provider.h"
+#include "neoclaw_nodes.h"
 #include "sandbox.h"
 #include "tools.h"
 #include "topology.h"
@@ -119,6 +120,12 @@ int main(int argc, char** argv) {
             std::setlocale(LC_ALL, "en_US.UTF-8");
         }
     }
+
+    // Register neoclaw-specific node types + conditions with NeoGraph's
+    // process-wide registries. Idempotent and cheap. Lets bundled
+    // topologies reference `llm_with_prompt`, `score_extract`,
+    // `score_below_0_2`, etc. without per-engine setup.
+    neoclaw::register_nodes();
 
     CliArgs cli = parse_cli(argc, argv);
 

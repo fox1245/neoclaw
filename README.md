@@ -188,10 +188,33 @@ topology: pair.json   # default ReAct pair-programmer (the v0.4 behaviour)
 Bundled topologies (under `topologies/`, also installed next to the
 binary so `pair.json` resolves without a path prefix):
 
-| File                    | Wiring                                  | Use for                                          |
-|-------------------------|-----------------------------------------|--------------------------------------------------|
-| `pair.json`             | `__start__ → llm ⇄ tools → __end__`      | Default. Pair-programmer ReAct loop.             |
-| `code-review.json`      | `__start__ → llm → __end__`              | One-shot reviewer. Pair with a review prompt.    |
+| File                       | Wiring                                                                                       | Use for                                                                                  |
+|----------------------------|----------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------|
+| `pair.json`                | `__start__ → llm ⇄ tools → __end__`                                                           | Default. Pair-programmer ReAct loop.                                                     |
+| `vibe.json`                | same as pair                                                                                 | Same wiring, different *vibe* — pair with a high-autonomy `system_prompt` and `max_iterations`.|
+| `plan-then-act.json`       | `__start__ → planner → executor(subgraph: pair) → __end__`                                    | Two-phase: planner LLM emits a numbered plan, executor subgraph runs it with tools.       |
+| `code-review.json`         | `__start__ → llm → __end__`                                                                   | One-shot reviewer. Pair with a review prompt.                                            |
+| `code-review-3pass.json`   | `__start__ → mechanical → semantic → consensus → __end__`                                     | Ouroboros-inspired 3-stage gate. Each pass uses `llm_with_prompt` with a different angle.|
+| `spec-first.json`          | `__start__ → interviewer → score_extract → (score_below_0_2 ? seed_writer : __end__) → __end__` | Socratic clarification loop with a math-gate (ambiguity ≤ 0.2 → crystallize spec).        |
+
+The latter three rely on neoclaw-side custom registrations:
+
+- **`llm_with_prompt`** — `llm_call` variant that reads `config.prompt`
+  (and optional `config.model`) from the JSON node, so one topology
+  can run multiple LLM stages with different reviewer angles or model
+  pins. Foundation for ouroboros-style 1×/10×/30× tiered routing once
+  neoclaw grows multi-Provider support.
+- **`score_extract`** — parses `{"score": float}` (with prose
+  tolerance: pure JSON, fenced markdown, or buried in narrative) from
+  the last assistant message and writes the float to the `score`
+  channel.
+- **`score_below_0_2`** / **`score_below_0_5`** — conditions that
+  read `score` and route `"ready"` (≤ threshold) vs `"more"` (above).
+  Mirrors ouroboros's canonical Ambiguity gate.
+
+All three are registered process-wide at `main()` entry via
+`src/neoclaw_nodes.cpp` — see that file for the code, and
+[ouroboros](https://github.com/Q00/ouroboros) for the design lineage.
 
 Author your own with the same JSON shape used by NeoGraph examples
 (`llm_call`, `tool_dispatch`, `intent_classifier`, `subgraph` are
