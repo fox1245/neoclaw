@@ -1,0 +1,37 @@
+{
+  "_comment": [
+    "Single-LLM code reviewer. The user pastes (or `read_file`-then-pastes)",
+    "code or a diff into the prompt, and the model emits a structured review",
+    "in one shot — no tool loop, no write access. Suited to read-only review",
+    "passes where you do NOT want the model touching files.",
+    "",
+    "Wiring: __start__ → llm → __end__   (one shot, conversation appended)",
+    "",
+    "Pair with a code-review-flavoured system prompt in your neoclaw.yaml,",
+    "for example:",
+    "",
+    "  agent:",
+    "    system_prompt: |",
+    "      You are a senior code reviewer. For each submission:",
+    "        1. Restate what the code is trying to do (one sentence).",
+    "        2. List concrete issues by severity (BLOCKER / MAJOR / NIT).",
+    "           Cite file:line and quote the offending snippet.",
+    "        3. Suggest minimal diffs, not rewrites.",
+    "        4. Flag missing tests or unhandled edge cases.",
+    "      Be terse. Skip preamble and disclaimers.",
+    "",
+    "tools.write_file should be set to false for this topology — the model",
+    "shouldn't be silently editing files during a review."
+  ],
+  "name": "code_review",
+  "channels": {
+    "messages": {"type": "list", "reducer": "append"}
+  },
+  "nodes": {
+    "llm": {"type": "llm_call"}
+  },
+  "edges": [
+    {"from": "__start__", "to": "llm"},
+    {"from": "llm",       "to": "__end__"}
+  ]
+}

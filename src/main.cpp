@@ -10,8 +10,10 @@
 #include "local_provider.h"
 #include "sandbox.h"
 #include "tools.h"
+#include "topology.h"
 #include "ui.h"
 
+#include <neograph/graph/engine.h>
 #include <neograph/llm/agent.h>
 #include <neograph/tool.h>
 
@@ -80,7 +82,7 @@ bool confirm_yn(const std::string& prompt) {
 
 void print_banner(const neoclaw::Config& cfg) {
     neoclaw::ui::BannerLines b;
-    b.title    = "neoclaw v0.4.0 - local C++ coding agent";
+    b.title    = "neoclaw v0.5.0 - local C++ coding agent";
     b.model    = cfg.model.id;
     b.endpoint = (cfg.backend == neoclaw::BackendKind::Local)
                      ? std::string("in-process (llama.cpp)")
@@ -226,13 +228,34 @@ int main(int argc, char** argv) {
         return 3;
     }
 
-    neograph::llm::Agent agent(
-        provider,
-        std::move(tools),
-        cfg.agent.system_prompt);
+    // Two execution paths share this REPL:
+    //
+    //   `agent`   — the v0.4 default. NeoGraph's pre-baked Agent ReAct
+    //               loop. Conversation lives in `agent_conv`.
+    //   `engine`  — JSON topology path (v0.5+). Same model + same tools,
+    //               different orchestration per `cfg.topology` file.
+    //               Conversation lives in `topology_conv` (json array).
+    //
+    // Exactly one of {agent, engine} is constructed per process.
+    std::unique_ptr<neograph::llm::Agent>          agent;
+    std::unique_ptr<neograph::graph::GraphEngine>  engine;
+    std::vector<neograph::ChatMessage>             agent_conv;
+    neograph::json                                  topology_conv = neograph::json::array();
 
-    // Conversation is kept across turns so the agent has context.
-    std::vector<neograph::ChatMessage> conversation;
+    try {
+        if (cfg.topology.empty()) {
+            agent = std::make_unique<neograph::llm::Agent>(
+                provider, std::move(tools), cfg.agent.system_prompt);
+        } else {
+            const auto path = neoclaw::resolve_topology_path(cfg.topology);
+            std::cerr << "[neoclaw] topology: " << path.string() << "\n";
+            engine = neoclaw::compile_topology(
+                path, provider, std::move(tools), cfg.agent.system_prompt);
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[neoclaw] orchestration init failed: " << e.what() << "\n";
+        return 4;
+    }
 
     // -----------------------------------------------------------------
     // 4. REPL.
@@ -255,7 +278,8 @@ int main(int argc, char** argv) {
             continue;
         }
         if (line == "/reset") {
-            conversation.clear();
+            agent_conv.clear();
+            topology_conv = neograph::json::array();
             std::cout << "[neoclaw] conversation cleared\n";
             continue;
         }
@@ -276,19 +300,37 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        conversation.push_back({"user", line});
+        auto on_token = [](const std::string& tok) {
+            std::cout << tok << std::flush;
+        };
 
         try {
-            agent.run_stream(conversation,
-                [](const std::string& tok) {
-                    std::cout << tok << std::flush;
-                },
-                cfg.agent.max_iterations);
+            if (agent) {
+                agent_conv.push_back({"user", line});
+                agent->run_stream(agent_conv, on_token, cfg.agent.max_iterations);
+            } else {
+                topology_conv.push_back(
+                    neograph::json{{"role", "user"}, {"content", line}});
+                topology_conv = neoclaw::run_topology_turn(
+                    *engine, std::move(topology_conv), on_token);
+            }
         } catch (const std::exception& e) {
             std::cerr << "\n[neoclaw] agent error: " << e.what() << "\n";
             // Drop the trailing user message so the user can retry.
-            if (!conversation.empty() && conversation.back().role == "user") {
-                conversation.pop_back();
+            if (agent) {
+                if (!agent_conv.empty() && agent_conv.back().role == "user") {
+                    agent_conv.pop_back();
+                }
+            } else if (!topology_conv.empty()) {
+                // neograph::json (yyjson wrapper) has no back()/erase(idx) —
+                // copy all but the last when the trailing entry is the user
+                // turn we just appended.
+                const size_t n = topology_conv.size();
+                if (topology_conv[n - 1].value("role", "") == "user") {
+                    auto trimmed = neograph::json::array();
+                    for (size_t i = 0; i + 1 < n; ++i) trimmed.push_back(topology_conv[i]);
+                    topology_conv = std::move(trimmed);
+                }
             }
             continue;
         }

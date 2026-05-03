@@ -34,7 +34,7 @@ if(NEOCLAW_BUILD_CUDA)
     message(STATUS "neoclaw: CUDA backend enabled (archs=${CMAKE_CUDA_ARCHITECTURES})")
 endif()
 
-project(neoclaw LANGUAGES CXX C VERSION 0.4.0)
+project(neoclaw LANGUAGES CXX C VERSION 0.5.0)
 
 # ---------------------------------------------------------------------------
 # Project-wide C++ settings
@@ -131,6 +131,7 @@ add_executable(neoclaw
     src/local_provider.cpp
     src/sandbox.cpp
     src/tools.cpp
+    src/topology.cpp
     src/ui.cpp
 )
 
@@ -156,12 +157,40 @@ set_target_properties(neoclaw PROPERTIES
     # Embed both the build-tree lib dir AND the install-tree relative
     # path into the binary's RPATH so it runs correctly from either
     # location — no patchelf repacking required when packaging.
+    #
+    # Three build-tree dirs to cover:
+    #   bin/                   — llama / ggml shared libs
+    #   _deps/neograph-build/  — neograph_core / _llm / _async (FetchContent
+    #                            output dir, not bin/ by default)
+    #   $ORIGIN/../lib         — install-tree fallback for shipped tarball
     BUILD_WITH_INSTALL_RPATH TRUE
-    INSTALL_RPATH "${CMAKE_BINARY_DIR}/bin:$ORIGIN/../lib")
+    INSTALL_RPATH "${CMAKE_BINARY_DIR}/bin:${neograph_BINARY_DIR}:$ORIGIN/../lib")
 
 if(NEOCLAW_BUILD_CUDA)
     set(_neoclaw_has_cuda TRUE CACHE INTERNAL "")
 endif()
+
+# ---------------------------------------------------------------------------
+# Bundled JSON topologies
+#
+# Copy `topologies/*.json` next to the binary at build time so a user can
+# write `topology: pair.json` in neoclaw.yaml and have it resolve via the
+# `<exe-dir>/topologies/<name>` lookup path implemented in topology.cpp.
+# Same idea at install time: place them in `share/neoclaw/topologies/` so
+# the FHS-style `<exe>/../share/...` fallback finds them.
+# ---------------------------------------------------------------------------
+file(GLOB _neoclaw_topology_files
+    "${CMAKE_CURRENT_SOURCE_DIR}/topologies/*.json")
+add_custom_target(neoclaw_topologies ALL
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "$<TARGET_FILE_DIR:neoclaw>/topologies"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${_neoclaw_topology_files}
+        "$<TARGET_FILE_DIR:neoclaw>/topologies/"
+    DEPENDS ${_neoclaw_topology_files}
+    COMMENT "Staging neoclaw topologies next to binary"
+    VERBATIM)
+add_dependencies(neoclaw neoclaw_topologies)
 
 # ---------------------------------------------------------------------------
 # Summary

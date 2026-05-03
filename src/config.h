@@ -64,6 +64,19 @@ struct Config {
     AgentConfig   agent;
     ToolsConfig   tools;
     SessionConfig session;
+
+    /// Optional path to a JSON topology file. When set, neoclaw boots
+    /// the orchestration via NeoGraph's `GraphEngine::compile(json, ctx)`
+    /// instead of the built-in single-agent ReAct loop. The same binary
+    /// + same model behaves differently per file — code review, planner-
+    /// executor, multi-agent debate, deep-research, …
+    ///
+    /// Resolution: relative paths resolve against (a) the directory of
+    /// the loaded YAML config, (b) `<exe-dir>/../share/neoclaw/topologies/`
+    /// next to the binary, in that order. Absolute paths are used as-is.
+    /// Empty = use the in-process Agent ReAct loop (the v0.4 default,
+    /// unchanged).
+    std::string topology;
 };
 
 /// Return a baseline Config. Never throws.

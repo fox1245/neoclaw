@@ -168,6 +168,43 @@ Config discovery order (first hit wins):
 3. `$XDG_CONFIG_HOME/neoclaw/config.yaml`
 4. `~/.config/neoclaw/config.yaml`
 
+### Topology swap (`topology: <file>.json`)
+
+NeoGraph compiles agent orchestration from a JSON definition — nodes,
+edges, channels, conditional routing — and `GraphEngine::compile(json,
+context)` is the entry point. neoclaw v0.5+ exposes that switch as a
+single config field:
+
+```yaml
+topology: pair.json   # default ReAct pair-programmer (the v0.4 behaviour)
+# topology: code-review.json   # single-LLM diff reviewer, no write tools
+```
+
+Bundled topologies (under `topologies/`, also installed next to the
+binary so `pair.json` resolves without a path prefix):
+
+| File                    | Wiring                                  | Use for                                          |
+|-------------------------|-----------------------------------------|--------------------------------------------------|
+| `pair.json`             | `__start__ → llm ⇄ tools → __end__`      | Default. Pair-programmer ReAct loop.             |
+| `code-review.json`      | `__start__ → llm → __end__`              | One-shot reviewer. Pair with a review prompt.    |
+
+Author your own with the same JSON shape used by NeoGraph examples
+(`llm_call`, `tool_dispatch`, `intent_classifier`, `subgraph` are
+built-in node types; `has_tool_calls`, `route_channel` are built-in
+conditions). Drop the file in `./topologies/`, point `topology:` at it,
+relaunch — same binary, same model, different agent persona.
+
+Set `NEOCLAW_TRACE_GRAPH=1` to dump the per-turn execution trace
+(`__start__ llm tools llm __end__ ...`) — handy when authoring a new
+topology and the wiring isn't doing what you expected.
+
+> **Streaming caveat (v0.5)**: the topology path returns the full
+> assistant turn after the run completes, not token-by-token. Upstream
+> NeoGraph's `LLMCallNode` doesn't override `execute_stream_async`, so
+> the engine's async coroutine path silently drops streaming
+> callbacks. The Agent path (no `topology:` field) still streams
+> normally. Fix lined up for v0.5.x.
+
 ### External server mode (`backend: http`)
 
 Point neoclaw at any OpenAI-compatible endpoint — llama.cpp server,
@@ -218,25 +255,30 @@ still chain reads of files *inside* the project root. Treat neoclaw
 like running a pilot tool over your own dotfiles: fine for personal
 projects, not fine for shared multi-tenant systems.
 
-## Status (v0.4)
+## Status (v0.5)
 
 - ✅ Single binary, auto-download, self-contained bundle
 - ✅ Local in-process inference (llama.cpp, direct) + remote HTTP fallback
 - ✅ Read / Write / Grep / Glob / Bash tools
 - ✅ Path containment, bwrap sandbox, y/N prompts
 - ✅ Built-in HF Hub downloader (no external hub dep)
+- ✅ JSON-defined topology swap (`pair.json`, `code-review.json`, …)
 
-v0.4 was the **TransformerCPP cutover**: the inference layer is now
-llama.cpp consumed directly, freeing neoclaw to focus on the harness
-(NeoGraph orchestration + tool loop + sandbox + UX) where the actual
-product value lives.
+v0.4 was the **TransformerCPP cutover** (inference is now llama.cpp,
+consumed directly). v0.5 leans into the harness positioning: agent
+orchestration is now a JSON file you swap, not a code path. The same
+binary + same model becomes a different persona per topology — exactly
+the "drop a file, change the agent" workflow NeoGraph was built for.
 
 Coming next:
 
+- Token-by-token streaming on the topology path (push the
+  `LLMCallNode::execute_stream_async` override into NeoGraph upstream)
+- More bundled topologies: `planner-executor.json`, `debate.json`,
+  `deep-research.json`
 - Diff preview before `write_file` commits
 - `linenoise` / readline for arrow keys + history
 - macOS `sandbox-exec` backend for the bash tool
-- Plan mode for multi-step refactors
 - GGUF chat template auto-detection (drop the hard-coded Gemma shape)
 - KV-cache reuse across turns (the only remaining inference-side win
   at batch=1 — shaves prefill on multi-turn conversations)

@@ -75,6 +75,7 @@ Config load_config(const fs::path& yaml_path) {
             maybe(b["allow_network"], cfg.tools.bash.allow_network);
         }
     }
+    maybe(root["topology"], cfg.topology);
     if (auto se = root["session"]) {
         if (auto pr = se["project_root"]) {
             const std::string raw = pr.as<std::string>();

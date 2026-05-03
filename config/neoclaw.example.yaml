@@ -29,6 +29,19 @@ model:
   # the "best" quant (prefers Q4_K_M).
   filename: gemma-4-E4B-it-Q4_K_M.gguf
 
+# Optional: swap the agent orchestration by pointing at a JSON
+# topology file. NeoGraph compiles graph definitions on-the-fly, so
+# the same binary + same model becomes a different persona per file.
+# Bundled topologies live in `topologies/` next to the binary; relative
+# paths resolve there automatically.
+#
+# topology: pair.json          # default — ReAct pair-programmer
+# topology: code-review.json   # single-LLM diff reviewer (pair with a
+#                              # review-flavoured agent.system_prompt
+#                              # and tools.write_file = false)
+#
+# Empty / unset = the v0.4 in-process Agent loop (unchanged).
+
 # Only consulted when `backend: http`.
 server:
   port: 8090

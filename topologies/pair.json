@@ -1,0 +1,31 @@
+{
+  "_comment": [
+    "neoclaw default topology — pair-programmer ReAct loop.",
+    "",
+    "This is the JSON equivalent of NeoGraph's create_react_graph(...) and",
+    "of neoclaw v0.4's hardcoded Agent path. The same model + same tool",
+    "set behave the same way under either; this file is what you copy and",
+    "edit when you want a *different* persona without rebuilding.",
+    "",
+    "Wiring: __start__ → llm → has_tool_calls? tools : __end__   tools → llm",
+    "        (the Reasoning + Acting loop from Yao et al. 2022, arXiv:2210.03629)"
+  ],
+  "name": "pair_react",
+  "channels": {
+    "messages": {"type": "list", "reducer": "append"}
+  },
+  "nodes": {
+    "llm":   {"type": "llm_call"},
+    "tools": {"type": "tool_dispatch"}
+  },
+  "edges": [
+    {"from": "__start__", "to": "llm"},
+    {
+      "from": "llm",
+      "type": "conditional",
+      "condition": "has_tool_calls",
+      "routes": {"true": "tools", "false": "__end__"}
+    },
+    {"from": "tools", "to": "llm"}
+  ]
+}
